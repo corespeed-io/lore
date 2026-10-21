@@ -70,14 +70,17 @@ connection resets) is 400 `invalid_request`, not a server error.
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
 
-Export writes the `lore-workspace-v2` format. Import accepts it and the earlier
-`lore-workspace-v1`; the two differ only in how the checksum orders object keys
-(v2 by code unit, identically in every runtime; v1 by the runtime's default-locale
-collation), so an archive exported by an earlier release still imports. The reverse
-does not hold: a release older than schema revision 9 accepts only
-`lore-workspace-v1` and refuses a v2 archive with `invalid_archive`, writing nothing.
-Upgrade the target deployment before moving a Workspace to it; the manifest `format`
-enum in its `/openapi.json` lists every format it imports.
+Export writes the `lore-workspace-v3` format. Import accepts it and the earlier
+`lore-workspace-v2` and `lore-workspace-v1`. v1 and v2 differ only in how the
+checksum orders object keys (v2 by code unit, identically in every runtime; v1 by
+the runtime's default-locale collation). v3 orders keys as v2 does and gives every
+Memory a `title` and a `gloss`, null for none, which the earlier formats cannot
+carry: a v3 Memory without them, or a v1 or v2 Memory with either, is refused. So an archive exported by an
+earlier release still imports. The reverse does not hold: a release older than
+schema revision 15 refuses a v3 archive, and one older than revision 9 also a v2
+archive, with `invalid_archive`, writing nothing. Upgrade the target deployment
+before moving a Workspace to it; the manifest `format` enum in its `/openapi.json`
+lists every format it imports.
 
 An archive is bounded to 10,000 visible Memories, 50,000 visible Links, and
 48,000,000 serialized bytes, so every archive export produces fits the
@@ -526,6 +529,16 @@ LORE_SMOKE_DATABASE_URL=postgres://postgres:password@localhost:5432/lore_memory_
   bun run smoke:memory-core
 ```
 
+`bun run smoke:title-backfill` takes the same kind of fresh, empty disposable database
+and leaves it at schema revision 16. It holds a request's uncommitted writes on three
+Memories while `0016` copies titles, commits them during the wait, and checks that
+each request's change wins. CI runs it in the PostgreSQL job.
+
+```bash
+LORE_SMOKE_DATABASE_URL=postgres://postgres:password@localhost:5432/lore_title_backfill_smoke_local \
+  bun run smoke:title-backfill
+```
+
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (and
 optionally `OTEL_EXPORTER_OTLP_HEADERS`) to export Next.js and Lore spans through OTLP. Lore's
 custom span attributes contain only bounded operation/outcome/error-class names.
@@ -617,6 +630,30 @@ most the 5-second `lock_timeout`; if it expires nothing is recorded and a rerun
 repeats it. The order matches Agent deletion, which locks `agents` before
 `memories`, so the two cannot deadlock. Older instances never name the table, and a
 Memory or Episode they forget removes its rows through the foreign keys.
+
+`0015`, `0016`, and `0017` add Memory titles and English glosses and keep
+`compatible_from` at 9. `0015` is transactional under the 5-second `lock_timeout`:
+it takes ACCESS EXCLUSIVE on `memories` and then `memory_proposals` to add their
+title and gloss columns and NOT VALID CHECKs (catalog-only, so each lock lasts
+milliseconds once granted), and replaces the outbox trigger, the Proposal review
+guard, `lore.lexical_candidates` (now with name channels over title and gloss), and
+`lore.portable_core_capabilities()`; it also adds `lore.memory_name_text` and a
+17-argument `lore.submit_memory_proposal` beside the 13-argument one older instances
+call.
+`0016` is transactional and copies each Memory's string `metadata.title`, trimmed,
+into its title when the text obeys the title rule, advancing that Memory's version
+(and its ETag) but not `updated_at`, and moving any embedding job still waiting for
+the old version to the new one; it takes only row locks, and then validates the
+CHECKs under SHARE UPDATE EXCLUSIVE. A request that changes a Memory while the copy
+waits on that row wins: the copy judges and reads the row again as the request left
+it. Metadata is left exactly as written; a title
+too long or on several lines stays only there. Nothing fills a gloss: the writing
+agent supplies one from now on, and older Memories have none. `0017` builds the
+three name indexes concurrently, like `0013`. An older instance writes neither
+field, keeps both when it updates a Memory, and gets the name channels in its
+lexical search. It cannot accept a Proposal that sets either: the review guard
+refuses the receipt rather than let it be lost, for as long as the rolling deploy
+lasts.
 
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a

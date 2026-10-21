@@ -64,6 +64,10 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
         MemoryProposalUpdateContentInput: { required: readonly string[] };
         MemoryProposalUpdateMetadataInput: { required: readonly string[] };
         MemoryProposalUpdateScopeInput: { required: readonly string[] };
+        MemoryProposalUpdateTitleInput: { required: readonly string[] };
+        MemoryProposalUpdateGlossInput: { required: readonly string[] };
+        Memory: { required: readonly string[]; properties: { title: unknown; gloss: unknown } };
+        CreateMemoryInput: { required: readonly string[] };
       };
     };
     openapi: string;
@@ -192,6 +196,8 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     memoryContentRecommendedCharacters: { const: 8_000 },
     memoryContentMaximumCharacters: { const: 32_000 },
     memoryMaximumChunks: { const: 64 },
+    memoryTitleCharacters: { const: 256 },
+    memoryGlossCharacters: { const: 512 },
     observationContentCharacters: { const: 100_000 },
     observationBatchRead: { const: 50 },
     workspaceArchiveLinks: { const: 50_000 },
@@ -220,12 +226,29 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     codeEvidence: { const: true },
     codeIndex: { const: true },
     memoryLinks: { const: true },
+    memoryTitles: { const: true },
+    memoryGlosses: { const: true },
   });
   expect(document.components.schemas.CreateMemoryProposalUpdateInput.anyOf).toEqual([
     { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
+    { $ref: "#/components/schemas/MemoryProposalUpdateTitleInput" },
+    { $ref: "#/components/schemas/MemoryProposalUpdateGlossInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
   ]);
+  expect(document.components.schemas.MemoryProposalUpdateTitleInput.required).toContain("title");
+  expect(document.components.schemas.MemoryProposalUpdateGlossInput.required).toContain("gloss");
+  // A title is optional on every write and nullable everywhere it is read.
+  expect(document.components.schemas.Memory.required).toEqual(
+    expect.arrayContaining(["title", "gloss"]),
+  );
+  expect(document.components.schemas.CreateMemoryInput.required).toEqual(["content"]);
+  expect(document.components.schemas.Memory.properties.title).toEqual({
+    anyOf: [{ type: "string", minLength: 1, maxLength: 256 }, { type: "null" }],
+  });
+  expect(document.components.schemas.Memory.properties.gloss).toEqual({
+    anyOf: [{ type: "string", minLength: 1, maxLength: 512 }, { type: "null" }],
+  });
   expect(document.components.schemas.MemoryProposalUpdateContentInput.required).toContain(
     "content",
   );

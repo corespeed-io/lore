@@ -146,8 +146,9 @@ test("export enforces its archive byte budget at the exact boundary", async () =
   const graph = createMemoryGraphModule(testContext.database);
   const first = await memories.remember(testContext.carol, { content: "Budgeted first." });
   const second = await memories.remember(testContext.carol, { content: "Budgeted second Memory." });
-  // JSON content (length + 2 quotes) + "{}" metadata + 256 per Memory, plus the manifest.
-  const memoryBytes = 1_024 + first.content.length + 260 + (second.content.length + 260);
+  // JSON content (length + 2 quotes) + "{}" metadata + a null title and gloss (4 each)
+  // + 256 per Memory, plus the manifest.
+  const memoryBytes = 1_024 + first.content.length + 268 + (second.content.length + 268);
   const exportWith = (maximumArchiveBytes: number) =>
     createPortabilityModule(testContext.database, { maximumArchiveBytes }).exportWorkspace(
       testContext.carol,
@@ -176,6 +177,8 @@ test("every archive that fits the export budget also fits it when serialized", a
   const memories = createMemoryModule(testContext.database);
   await memories.remember(testContext.carol, {
     content: 'Escapes "quoted" \\ and\ttabs\nnewlines, 日本語のメモ, and emoji 🧠.',
+    title: 'A "quoted" \\ title, 日本語, 🧠',
+    gloss: 'A "quoted" \\ gloss',
     metadata: { nested: { list: [1.5, -2, 1e21, "é", null, true] }, "k\u0001": "v\u0002" },
   });
   await memories.remember(testContext.carol, { content: "\u0007".concat("Control start.") });
@@ -350,7 +353,11 @@ async function resigned(archive: WorkspaceArchive): Promise<WorkspaceArchive> {
 /** Carol's two linked Memories, exported so that Alice can import them. */
 async function linkedArchive(testContext: MemoryTestContext): Promise<WorkspaceArchive> {
   const memories = createMemoryModule(testContext.database);
-  const source = await memories.remember(testContext.carol, { content: "Archive text source." });
+  const source = await memories.remember(testContext.carol, {
+    content: "Archive text source.",
+    title: "Archive source",
+    gloss: "Archive source gloss",
+  });
   const target = await memories.remember(testContext.carol, { content: "Archive text target." });
   await createMemoryGraphModule(testContext.database).connect(testContext.carol, {
     sourceMemoryId: source.id,
@@ -556,8 +563,8 @@ test.each<[string, (archive: WorkspaceArchive) => void]>([
 // The format picks the checksum's key order, so it is checked before the checksum is
 // computed: an unknown one is an archive failure, never a failure to hash it.
 test.each<[string, unknown]>([
-  ["a later format", "lore-workspace-v3"],
-  ["a format in the wrong case", "LORE-WORKSPACE-V2"],
+  ["a later format", "lore-workspace-v4"],
+  ["a format in the wrong case", "LORE-WORKSPACE-V3"],
   ["no format", undefined],
 ])("import dry-run refuses %s, as the real import does", async (_name, format) => {
   const testContext = await createMemoryTestContext();
@@ -567,15 +574,108 @@ test.each<[string, unknown]>([
   await expectRefusedBeforeWrites(
     testContext,
     archive,
-    /^archive format must be lore-workspace-v1 or lore-workspace-v2$/,
+    /^archive format must be lore-workspace-v1 or lore-workspace-v2 or lore-workspace-v3$/,
   );
 });
 
-test("export writes lore-workspace-v2, and a lore-workspace-v1 archive still imports", async () => {
+test("export writes every title and gloss in lore-workspace-v3, and import restores them", async () => {
+  const testContext = await createMemoryTestContext();
+  const archive = await linkedArchive(testContext);
+  expect(archive.manifest.format).toBe("lore-workspace-v3");
+  // Every Memory states its title and gloss, null for none.
+  expect(archive.memories.map((memory) => [memory.title, memory.gloss])).toEqual(
+    expect.arrayContaining([
+      ["Archive source", "Archive source gloss"],
+      [null, null],
+    ]),
+  );
+  expect(archive.memories).toHaveLength(2);
+
+  const imported = await createPortabilityModule(testContext.database).importWorkspace(
+    testContext.alice,
+    { archive, ownerMap: ownerMapTo(archive, testContext.alice) },
+  );
+  const titles = await testContext.adminDatabase.transaction((transaction) =>
+    transaction.query<{ title: string | null; gloss: string | null }>(
+      "SELECT title, gloss FROM memories WHERE id = ANY($1::uuid[]) ORDER BY title NULLS LAST",
+      [Object.values(imported.memoryIdMap)],
+    ),
+  );
+  expect(titles.rows).toEqual([
+    { title: "Archive source", gloss: "Archive source gloss" },
+    { title: null, gloss: null },
+  ]);
+  await testContext.close();
+});
+
+test.each<[string, (archive: WorkspaceArchive) => void, RegExp]>([
+  [
+    "a v3 Memory without its title",
+    (archive) => {
+      delete archive.memories[0].title;
+    },
+    /^memories\[0\]\.title is required$/,
+  ],
+  [
+    "a v3 title that breaks the title rule",
+    (archive) => {
+      archive.memories[0].title = "Two\nlines";
+    },
+    /^memories\[0\]\.title must be one line without control characters$/,
+  ],
+  [
+    "a v3 title past the bound",
+    (archive) => {
+      archive.memories[0].title = "x".repeat(257);
+    },
+    /^memories\[0\]\.title may contain at most 256 characters$/,
+  ],
+  [
+    "a v3 Memory without its gloss",
+    (archive) => {
+      delete archive.memories[0].gloss;
+    },
+    /^memories\[0\]\.gloss is required$/,
+  ],
+  [
+    "a v3 gloss past the bound",
+    (archive) => {
+      archive.memories[0].gloss = "x".repeat(513);
+    },
+    /^memories\[0\]\.gloss may contain at most 512 characters$/,
+  ],
+  [
+    "a gloss in a v2 archive, which an older import would drop",
+    (archive) => {
+      archive.manifest.format = "lore-workspace-v2";
+      delete archive.memories[0].title;
+      archive.memories[0].gloss = "Kept only in v3";
+    },
+    /^memories\[0\]\.gloss requires format lore-workspace-v3$/,
+  ],
+  [
+    "a title in a v2 archive, which an older import would drop",
+    (archive) => {
+      archive.manifest.format = "lore-workspace-v2";
+      archive.memories[0].title = "Kept only in v3";
+    },
+    /^memories\[0\]\.title requires format lore-workspace-v3$/,
+  ],
+])("import dry-run refuses %s, as the real import does", async (_name, mutate, message) => {
+  const testContext = await createMemoryTestContext();
+  const archive = await linkedArchive(testContext);
+  mutate(archive);
+  await expectRefusedBeforeWrites(testContext, await resigned(archive), message);
+});
+
+test("lore-workspace-v1 and lore-workspace-v2 archives, which carry no titles or glosses, still import", async () => {
   const testContext = await createMemoryTestContext();
   const portability = createPortabilityModule(testContext.database);
   const archive = await linkedArchive(testContext);
-  expect(archive.manifest.format).toBe("lore-workspace-v2");
+  for (const memory of archive.memories) {
+    delete memory.title;
+    delete memory.gloss;
+  }
 
   // An archive exported before v2: the same records, checksummed with v1's key order.
   archive.manifest.format = "lore-workspace-v1";

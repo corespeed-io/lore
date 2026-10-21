@@ -1,4 +1,4 @@
-import { hasLoneSurrogate } from "@corespeed/lore-core";
+import { hasLoneSurrogate, MEMORY_SEARCH_LIMITS } from "@corespeed/lore-core";
 import type { z } from "zod/v4";
 import type { IdempotencyRequest } from "@/server/api/idempotency";
 import { mutationRequestHash } from "@/server/api/idempotency";
@@ -150,6 +150,26 @@ export function requiredString(value: unknown, name: string, maximumLength: numb
     throw new BadRequestError(`${name} exceeds ${maximumLength} characters`);
   }
   return normalized;
+}
+
+/**
+ * A search's translations as a request carries them: at most the engine's number of
+ * strings, each held to the rules a search query is held to. None is undefined.
+ */
+export function searchTranslations(value: unknown, name: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new BadRequestError(`${name} must be an array of strings`);
+  }
+  if (value.length > MEMORY_SEARCH_LIMITS.maximumTranslations) {
+    throw new BadRequestError(
+      `${name} may hold at most ${MEMORY_SEARCH_LIMITS.maximumTranslations} queries`,
+    );
+  }
+  return value.map((item: string) => {
+    if (!item.trim()) throw new BadRequestError(`${name} must not hold an empty query`);
+    return requiredString(item, name, MEMORY_SEARCH_LIMITS.maximumQueryLength);
+  });
 }
 
 export function parseMemoryInput<Schema extends z.ZodType>(

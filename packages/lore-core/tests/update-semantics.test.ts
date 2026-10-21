@@ -202,6 +202,64 @@ describe("update writes only what differs", () => {
     expect(notified).toEqual([]);
   });
 
+  test("a title is set, changed, and removed alone, keeping chunks and vectors", async () => {
+    const created = await memories.remember({
+      content: "The harbour chain is raised at dusk.",
+      title: "Harbour chain",
+    });
+    expect(created).toMatchObject({ version: 1, title: "Harbour chain" });
+    await embedEveryChunk(created.id);
+    const chunks = await chunksOf(created.id);
+    const vectors = await vectorChunkIds(created.id);
+    notified = [];
+
+    const renamed = await memories.update(
+      created.id,
+      { title: "Harbour chain schedule" },
+      { expectedVersion: 1 },
+    );
+    expect(renamed).toMatchObject({
+      version: 2,
+      title: "Harbour chain schedule",
+      content: created.content,
+    });
+    // The same title again changes nothing; omitting it keeps it.
+    expect(
+      await memories.update(
+        created.id,
+        { title: "Harbour chain schedule" },
+        { expectedVersion: 2 },
+      ),
+    ).toMatchObject({ version: 2, updatedAt: renamed?.updatedAt });
+    expect(
+      await memories.update(created.id, { scope: "private" }, { expectedVersion: 2 }),
+    ).toMatchObject({ version: 3, title: "Harbour chain schedule" });
+    // Null removes it, and removing an absent title changes nothing.
+    expect(
+      await memories.update(created.id, { title: null }, { expectedVersion: 3 }),
+    ).toMatchObject({ version: 4, title: null });
+    expect(
+      await memories.update(created.id, { title: null }, { expectedVersion: 4 }),
+    ).toMatchObject({ version: 4, title: null });
+    expect(await chunksOf(created.id)).toEqual(chunks);
+    expect(await vectorChunkIds(created.id)).toEqual(vectors);
+    expect(notified).toEqual([]);
+  });
+
+  test("a gloss is set and removed alone, independent of the title", async () => {
+    const created = await memories.remember({
+      content: "港口的铁链在黄昏升起。",
+      title: "港口铁链",
+      gloss: "The harbour chain is raised at dusk",
+    });
+    expect(created).toMatchObject({ gloss: "The harbour chain is raised at dusk" });
+    const removed = await memories.update(created.id, { gloss: null }, { expectedVersion: 1 });
+    expect(removed).toMatchObject({ version: 2, gloss: null, title: "港口铁链" });
+    expect(
+      await memories.update(created.id, { gloss: null }, { expectedVersion: 2 }),
+    ).toMatchObject({ version: 2 });
+  });
+
   test("a scope-only change keeps chunks and vectors", async () => {
     const created = await memories.remember({ content: "Night watch rotates every four hours." });
     await embedEveryChunk(created.id);

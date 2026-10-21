@@ -11,6 +11,10 @@ interface SaveMemoryInput {
   id?: string;
   content: string;
   scope: MemoryScope;
+  /** Null for none; on an edit, null removes the title. */
+  title: string | null;
+  /** An English gloss, null for none; on an edit, null removes it. */
+  gloss: string | null;
   version?: number;
 }
 
@@ -27,10 +31,15 @@ export function useLoreMutations(workspaceId: string) {
         ? updateMemory(
             workspaceId,
             arg.id,
-            { content: arg.content, scope: arg.scope },
+            { content: arg.content, scope: arg.scope, title: arg.title, gloss: arg.gloss },
             arg.version ?? 1,
           )
-        : rememberMemory(workspaceId, { content: arg.content, scope: arg.scope }),
+        : rememberMemory(workspaceId, {
+            content: arg.content,
+            scope: arg.scope,
+            ...(arg.title === null ? {} : { title: arg.title }),
+            ...(arg.gloss === null ? {} : { gloss: arg.gloss }),
+          }),
   );
   const forgetMemoryMutation = useSWRMutation(
     workspaceId ? loreKeys.forgetMemory(workspaceId) : null,

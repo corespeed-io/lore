@@ -9,6 +9,7 @@ import { MEMORY_CHUNKING_REVISION, partitionMemoryContent } from "../memory-chun
 import {
   memorySearchLimit,
   memorySearchQuery,
+  memorySearchTranslations,
   validateMemoryMetadata,
   validateMemoryScope,
 } from "../memory-input";
@@ -50,6 +51,8 @@ export interface EpisodeEvidenceIndexResult {
 
 export interface SearchEpisodeEvidence {
   query: string;
+  /** The same question in other languages, searched beside the query and fused with it. */
+  translations?: readonly string[];
   limit?: number;
   metadataFilter?: Record<string, unknown>;
   scope?: MemoryScope;
@@ -879,6 +882,7 @@ export function createEpisodeEvidenceModule(
 
     async search(input: SearchEpisodeEvidence): Promise<EpisodeEvidenceSearchResult[]> {
       const query = memorySearchQuery(input.query);
+      const translations = memorySearchTranslations(input.translations);
       const limit = memorySearchLimit(input.limit);
       if (input.metadataFilter !== undefined) validateMemoryMetadata(input.metadataFilter);
       if (input.scope !== undefined) validateMemoryScope(input.scope);
@@ -903,7 +907,13 @@ export function createEpisodeEvidenceModule(
           planned = [];
         }
       }
-      const queries = retrievalQueries(query, planned, queryPlannerMaxQueries);
+      // Translations follow the query and come before planned rewrites, which the
+      // planner writes from the query alone.
+      const queries = retrievalQueries(
+        query,
+        [...translations, ...planned],
+        queryPlannerMaxQueries + translations.length,
+      );
       const queryEmbeddings: Array<string | null> = [];
       for (const plannedQuery of queries) {
         if (!embeddingProvider) {

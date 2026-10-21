@@ -19,8 +19,11 @@ import {
   memoryListOffset,
   memorySearchLimit,
   memorySearchQuery,
+  memorySearchTranslations,
   validateMemoryMetadata,
   validateMemoryScope,
+  validateOptionalMemoryGloss,
+  validateOptionalMemoryTitle,
 } from "./memory-input";
 import type {
   ContextGroupExpansionOptions,
@@ -338,6 +341,8 @@ export function memorySelectColumns(alias?: string): string {
       "owner_user_id",
       "created_by_agent_id",
       "scope",
+      "title",
+      "gloss",
       "content",
       "metadata",
       "version",
@@ -392,11 +397,12 @@ interface SearchStatementInput {
 /**
  * One hybrid retrieval statement; independent queries can share a batch. The
  * lexical channels (simple and English full text, relaxed English terms, exact
- * entity aliases, CJK grams) come from `lore.lexical_candidates`, whose answer must
- * equal the reference channels in `./testing` (`referenceLexicalCandidates`); the
- * host runs them where its indexes can serve them, which under RLS a query on the
- * tables cannot. The semantic channel runs here. Reciprocal-rank fusion (k = 60)
- * scores each chunk across the channels.
+ * entity aliases, CJK grams, and the full text, relaxed, and CJK name channels over
+ * the title and gloss, which answer a Memory's first chunk) come from
+ * `lore.lexical_candidates`, whose answer must equal the reference channels in
+ * `./testing` (`referenceLexicalCandidates`); the host runs them where its indexes
+ * can serve them, which under RLS a query on the tables cannot. The semantic channel
+ * runs here. Reciprocal-rank fusion (k = 60) scores each chunk across the channels.
  */
 function searchStatement(input: SearchStatementInput): PostgresStatement<SearchRow> {
   return statement<SearchRow>(
@@ -743,6 +749,8 @@ export function memoryFromRow(row: MemoryRow): Memory {
     ownerId: row.owner_user_id,
     sourceId: row.created_by_agent_id,
     scope: row.scope,
+    title: row.title,
+    gloss: row.gloss,
     content: row.content,
     metadata: row.metadata,
     version: row.version,
@@ -879,11 +887,14 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const { chunks } = prepareMemoryContent(input.content);
     const scope = input.scope === undefined ? defaultMemoryScope : validateMemoryScope(input.scope);
     const metadata = input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata);
+    const title = input.title === undefined ? null : validateOptionalMemoryTitle(input.title);
+    const gloss = input.gloss === undefined ? null : validateOptionalMemoryGloss(input.gloss);
     const id = crypto.randomUUID();
     const memoryInsert = statement<MemoryRow>(
       recordingWrite(`INSERT INTO memories (
-         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata, title,
+         gloss
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
        RETURNING ${memorySelectColumns()}`),
       [
         id,
@@ -893,6 +904,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         scope,
         input.content,
         JSON.stringify(metadata),
+        title,
+        gloss,
       ],
     );
     const chunkInsert = chunkInsertStatement(storageScope.partitionId, id, chunks);
@@ -951,6 +964,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     input: UpdateMemory,
   ): Promise<LockedMemory | null> {
     if (input.scope !== undefined) validateMemoryScope(input.scope);
+    if (input.title !== undefined) validateOptionalMemoryTitle(input.title);
+    if (input.gloss !== undefined) validateOptionalMemoryGloss(input.gloss);
     if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
     const chunks = input.content === undefined ? null : prepareMemoryContent(input.content).chunks;
     const metadata = input.metadata === undefined ? null : JSON.stringify(input.metadata);
@@ -1019,14 +1034,15 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
    * Apply the update a Memory was locked for. Throws MemoryVersionConflictError on
    * a stale expected version.
    *
-   * Only what actually differs is written. When content, scope, and metadata all
-   * equal the locked row, nothing is written: the row comes back with its version
+   * Only what actually differs is written. When content, scope, title, gloss, and
+   * metadata all equal the locked row, nothing is written: the row comes back with its version
    * and `updatedAt`, no event is recorded, and no job is queued (the final batch
    * carries only the host's `finish` statements and, with `commit`, COMMIT).
    * Content changes replace only the chunks whose ordinals differ, so unchanged
-   * chunks keep their ids and vectors; scope and metadata changes leave chunks
-   * alone. A job for the new version is queued only when some chunk lacks a vector
-   * in the serving generation; jobs for older versions are cancelled when claimed.
+   * chunks keep their ids and vectors; scope, title, gloss, and metadata changes
+   * leave chunks alone. A job for the new version is queued only when some chunk lacks a
+   * vector in the serving generation; jobs for older versions are cancelled when
+   * claimed.
    *
    * `versionUnchanged` records a new version even when nothing differs, for a
    * host whose own receipt names the next version (lore's Memory Proposal
@@ -1048,7 +1064,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     }
     const contentChanged = chunks !== null && input.content !== currentMemory.content;
     const scopeChanged = input.scope !== undefined && input.scope !== currentMemory.scope;
-    const changed = contentChanged || scopeChanged || metadataChanged;
+    const titleChanged = input.title !== undefined && input.title !== currentMemory.title;
+    const glossChanged = input.gloss !== undefined && input.gloss !== currentMemory.gloss;
+    const changed =
+      contentChanged || scopeChanged || titleChanged || glossChanged || metadataChanged;
     if (!changed && options.versionUnchanged !== true) {
       // Nothing is written: the locked row is what the write left.
       if (options.finish) {
@@ -1065,6 +1084,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
          SET content = COALESCE($3::text, content),
              scope = COALESCE($4::memory_scope, scope),
              metadata = COALESCE($5::jsonb, metadata),
+             -- A title or gloss may be removed, so whether one changes travels on its own.
+             title = CASE WHEN $7::boolean THEN $8::text ELSE title END,
+             gloss = CASE WHEN $9::boolean THEN $10::text ELSE gloss END,
              version = version + 1,
              updated_at = now()
          WHERE id = $1
@@ -1078,6 +1100,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         scopeChanged ? input.scope : null,
         metadataChanged ? metadata : null,
         currentMemory.version,
+        titleChanged,
+        titleChanged ? (input.title ?? null) : null,
+        glossChanged,
+        glossChanged ? (input.gloss ?? null) : null,
       ],
     );
     const tail: PostgresStatement<unknown>[] = [];
@@ -1270,9 +1296,9 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
 
   /**
    * Insert many Memories with caller-chosen ids in bounded set-based batches, with
-   * their chunks and embedding jobs. Every record obeys the same content, scope, and
-   * metadata rules as a single write. Returns each inserted id, in PostgreSQL's
-   * lowercase form, with its version.
+   * their chunks and embedding jobs. Every record obeys the same content, scope,
+   * title, gloss, and metadata rules as a single write. Returns each inserted id, in
+   * PostgreSQL's lowercase form, with its version.
    */
   async function insertMemoriesInTransaction(
     transaction: PostgresTransaction,
@@ -1283,6 +1309,14 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       // PostgreSQL returns uuid in lowercase; match RETURNING rows in that form.
       id: record.id.toLowerCase(),
       scope: validateMemoryScope(record.scope, `records[${index}].scope`),
+      title:
+        record.title === undefined
+          ? null
+          : validateOptionalMemoryTitle(record.title, `records[${index}].title`),
+      gloss:
+        record.gloss === undefined
+          ? null
+          : validateOptionalMemoryGloss(record.gloss, `records[${index}].gloss`),
       content: record.content,
       metadata: validateMemoryMetadata(record.metadata, `records[${index}].metadata`),
       chunks: batchRecordChunks(record, index),
@@ -1290,15 +1324,23 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const inserted = await queryInRecordBatches<{ id: string; version: number | string }>(
       transaction,
       `INSERT INTO memories (
-         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata
+         id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata, title,
+         gloss
        )
        SELECT record.id, $2::uuid, $3::uuid, $4::uuid, record.scope, record.content,
-              record.metadata
+              record.metadata, record.title, record.gloss
        FROM jsonb_to_recordset($1::jsonb) AS record(
-         id uuid, scope memory_scope, content text, metadata jsonb
+         id uuid, scope memory_scope, content text, metadata jsonb, title text, gloss text
        )
        RETURNING id, version`,
-      prepared.map(({ id, scope, content, metadata }) => ({ id, scope, content, metadata })),
+      prepared.map(({ id, scope, title, gloss, content, metadata }) => ({
+        id,
+        scope,
+        title,
+        gloss,
+        content,
+        metadata,
+      })),
       [storageScope.partitionId, storageScope.ownerId, storageScope.sourceId ?? null],
     );
     await queryInRecordBatches(
@@ -1423,6 +1465,8 @@ export function createMemoryModule(
       if (
         input.content === undefined &&
         input.scope === undefined &&
+        input.title === undefined &&
+        input.gloss === undefined &&
         input.metadata === undefined
       ) {
         return this.retrieve(id);
@@ -1493,6 +1537,7 @@ export function createMemoryModule(
 
     async search(input: SearchMemory): Promise<MemorySearchResult[]> {
       const query = memorySearchQuery(input.query);
+      const translations = memorySearchTranslations(input.translations);
       const limit = memorySearchLimit(input.limit);
       validateReadFilters(input);
       if (!query) return [];
@@ -1515,7 +1560,13 @@ export function createMemoryModule(
           plannedQueries = [];
         }
       }
-      const queries = retrievalQueries(query, plannedQueries, queryPlannerMaxQueries);
+      // Translations follow the query and come before planned rewrites, which the
+      // planner writes from the query alone.
+      const queries = retrievalQueries(
+        query,
+        [...translations, ...plannedQueries],
+        queryPlannerMaxQueries + translations.length,
+      );
       const queryEmbeddings = await embedRetrievalQueries(
         embeddingProvider,
         queries,

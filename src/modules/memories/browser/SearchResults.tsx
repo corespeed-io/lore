@@ -8,6 +8,7 @@ import {
   browseFilterEmptyNote,
   browseTypeChips,
   memoryConfiguredType,
+  memoryGloss,
   memoryTitle,
   memoryType,
   metadataLabel,
@@ -68,6 +69,20 @@ function highlight(text: string, terms: string[]): React.ReactNode {
       <span key={key}>{part}</span>
     );
   });
+}
+
+/**
+ * A Memory's English gloss, one muted line under its title, so a reader who cannot
+ * read the content still knows the row, and sees which words an English query matched.
+ */
+function MemoryRowGloss({ memory, terms = [] }: { memory: Memory; terms?: string[] }) {
+  const gloss = memoryGloss(memory);
+  if (gloss === null) return null;
+  return (
+    <div className="search-row-gloss" lang="en">
+      {highlight(gloss, terms)}
+    </div>
+  );
 }
 
 /** Scope is explicit text on every Memory row; a type badge appears only when set. */
@@ -203,6 +218,7 @@ export function SearchResults({
                 {memoryTitle(memory)}
                 <MemoryRowLabels memory={memory} />
               </div>
+              <MemoryRowGloss memory={memory} />
               <div className="search-row-foot">
                 <span className="search-row-id">{memory.id}</span>
                 <span className="activity-date">{shortMemoryDate(memory.updatedAt)}</span>
@@ -265,6 +281,7 @@ export function SearchResults({
                 {highlight(memoryTitle(memory), terms)}
                 <MemoryRowLabels memory={memory} />
               </div>
+              <MemoryRowGloss memory={memory} terms={terms} />
               <div className="search-row-id">{memory.id}</div>
               {snippet && <div className="search-row-snip">{highlight(snippet, terms)}</div>}
               <div className="search-row-foot">

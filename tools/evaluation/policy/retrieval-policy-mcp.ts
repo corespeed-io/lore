@@ -35,6 +35,8 @@ function fixtureMemory(): Memory {
     ownerUserId: USER_ID,
     createdByAgentId: null,
     scope: "shared",
+    title: null,
+    gloss: null,
     content:
       "The team decided that proposal review must remain human-only before canonical Memory changes.",
     metadata: { fixture: "retrieval-policy-v1" },
@@ -211,6 +213,8 @@ function retrievedContext(input: RetrieveContextInput): RetrievedContext {
           {
             id: memory.id,
             scope: memory.scope,
+            title: memory.title,
+            gloss: memory.gloss,
             score: 0.95,
             evidence: "Proposal review must remain human-only before canonical Memory changes.",
             updatedAt: memory.updatedAt,

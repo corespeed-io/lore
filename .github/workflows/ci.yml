@@ -131,6 +131,16 @@ jobs:
           LORE_EMBEDDING_PROVIDER: ollama
           LORE_EMBEDDING_MODEL: qwen3-embedding:0.6b
           OLLAMA_BASE_URL: http://127.0.0.1:9
+      # 0016 copies metadata.title while requests may still write; a request that
+      # commits while the copy waits on its row must win. PGlite has one connection,
+      # so this runs here, in a fresh database of its own.
+      - name: Run the title backfill concurrency smoke
+        run: |
+          psql postgres://postgres:postgres@127.0.0.1:5432/postgres \
+            -c 'CREATE DATABASE lore_title_backfill_smoke_ci'
+          bun run smoke:title-backfill
+        env:
+          LORE_SMOKE_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/lore_title_backfill_smoke_ci
 
   packages:
     name: SDK, CLI & MCP packages

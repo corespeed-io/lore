@@ -4,6 +4,8 @@ import {
   MEMORY_CONTENT_LIMITS,
   MEMORY_LINK_LIMITS,
   type MemoryScope,
+  validateMemoryGloss,
+  validateMemoryTitle,
 } from "@corespeed/lore-core";
 import {
   type EpisodeKind,
@@ -217,6 +219,60 @@ test("CHECK constraints bound what the TypeScript validators bound", async () =>
     expect(capture(constraints.get(name), new RegExp(`${column} ~ '([^']+)'`)), name).toBe(
       oidPattern,
     );
+  }
+  await testContext.close();
+});
+
+test("the title and gloss CHECKs accept exactly what their validators accept", async () => {
+  const testContext = await createMemoryTestContext();
+  const constraints = await constraintDefinitions(testContext);
+  // Every BMP character alone (PostgreSQL text holds no surrogate half), and the
+  // lengths and mixes that decide each bound and the whitespace rule.
+  const candidates: string[] = [];
+  for (let code = 1; code <= 0xffff; code += 1) {
+    if (code < 0xd800 || code > 0xdfff) candidates.push(String.fromCharCode(code));
+  }
+  for (const length of [256, 257, 512, 513]) {
+    candidates.push("x".repeat(length), "🧭".repeat(length - 1).concat("x"));
+  }
+  candidates.push(" a ", "\u3000a\u3000", "a\u00A0", "a\nb", "\u2028a");
+  const accepts = (validate: (value: string) => unknown) =>
+    candidates.map((candidate) => {
+      try {
+        validate(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const titles = accepts(validateMemoryTitle);
+  const glosses = accepts(validateMemoryGloss);
+  for (const [name, column, engine] of [
+    ["memories_title_check", "title", titles],
+    ["memory_proposals_proposed_title_check", "proposed_title", titles],
+    ["memories_gloss_check", "gloss", glosses],
+    ["memory_proposals_proposed_gloss_check", "proposed_gloss", glosses],
+  ] as const) {
+    // The CHECK's own expression, evaluated for each candidate in place of its column.
+    const expression = capture(constraints.get(name), /^CHECK \((.*)\)$/s).replace(
+      new RegExp(`\\b${column}\\b`, "g"),
+      "candidate",
+    );
+    const accepted = await asAdmin<{ accepted: boolean }>(
+      testContext,
+      `SELECT (${expression}) AS accepted
+       FROM unnest($1::text[]) WITH ORDINALITY AS input(candidate, ordinal)
+       ORDER BY ordinal`,
+      [candidates],
+    );
+    const disagreements = candidates.filter(
+      (_candidate, index) => accepted[index]?.accepted !== engine[index],
+    );
+    expect(
+      disagreements.map((candidate) => [candidate.codePointAt(0), candidate.length]),
+      name,
+    ).toEqual([]);
+    expect(accepted).toHaveLength(candidates.length);
   }
   await testContext.close();
 });

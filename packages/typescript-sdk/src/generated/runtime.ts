@@ -30,7 +30,8 @@ export const LORE_CONTRACT = {
   "vocabularies": {
     "workspaceArchiveFormats": [
       "lore-workspace-v1",
-      "lore-workspace-v2"
+      "lore-workspace-v2",
+      "lore-workspace-v3"
     ],
     "memoryScopes": [
       "shared",
@@ -132,7 +133,10 @@ export const LORE_CONTRACT = {
   },
   "limits": {
     "memoryMetadataSerializedLength": 100000,
+    "memoryTitleCharacters": 256,
+    "memoryGlossCharacters": 512,
     "memorySearchQueryLength": 10000,
+    "memorySearchTranslations": 3,
     "memoryListLimit": 100,
     "memoryListLimitDefault": 50,
     "memorySearchLimitDefault": 10,

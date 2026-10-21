@@ -31,6 +31,8 @@ function memory(index: number): Memory {
     ownerUserId: "20000000-0000-4000-8000-000000000001",
     createdByAgentId: null,
     scope: "shared",
+    title: null,
+    gloss: null,
     content: `Memory ${index}`,
     metadata: {},
     version: 1,

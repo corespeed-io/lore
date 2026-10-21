@@ -12,6 +12,8 @@ import {
   memorySelectColumns,
   prepareMemoryContent,
   serializedTimestamp,
+  validateOptionalMemoryGloss,
+  validateOptionalMemoryTitle,
 } from "@corespeed/lore-core";
 import {
   CITABLE_ARTIFACT_SOURCE,
@@ -126,6 +128,13 @@ export interface MemoryProposal {
   baseMemoryVersion: number | null;
   proposedContent: string;
   proposedScope: MemoryScope;
+  /**
+   * The title a create gives its Memory (null for none), or the title an update sets
+   * (null removes it). Absent from an update that keeps the target's title.
+   */
+  proposedTitle?: string | null;
+  /** The gloss a create gives or an update sets, as `proposedTitle` is the title. */
+  proposedGloss?: string | null;
   proposedMetadata: Record<string, unknown>;
   evidenceMemoryIds: string[];
   evidenceObservationIds: string[];
@@ -147,6 +156,8 @@ export interface ProposeMemoryCreate extends ProposedMemoryBase {
   kind: "create";
   content: string;
   scope?: MemoryScope;
+  title?: string | null;
+  gloss?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -186,9 +197,13 @@ interface MemoryProposalRow {
   proposed_content: string;
   proposed_scope: MemoryScope;
   proposed_metadata: Record<string, unknown>;
+  proposed_title: string | null;
+  proposed_gloss: string | null;
   changes_content: boolean;
   changes_scope: boolean;
   changes_metadata: boolean;
+  changes_title: boolean;
+  changes_gloss: boolean;
   status: MemoryProposalStatus;
   reviewed_by_user_id: string | null;
   accepted_memory_id: string | null;
@@ -240,6 +255,10 @@ function toMemoryProposal(
     baseMemoryVersion: row.base_memory_version,
     proposedContent: row.proposed_content,
     proposedScope: row.proposed_scope,
+    // A Proposal stored before schema revision 15 has changes_title and changes_gloss
+    // false: a create then proposed neither, and an update keeps the target's.
+    ...(row.kind === "create" || row.changes_title ? { proposedTitle: row.proposed_title } : {}),
+    ...(row.kind === "create" || row.changes_gloss ? { proposedGloss: row.proposed_gloss } : {}),
     proposedMetadata: row.proposed_metadata,
     evidenceMemoryIds: [...evidenceMemoryIds],
     evidenceObservationIds: [...evidenceObservationIds],
@@ -379,13 +398,17 @@ export function createMemoryProposalsModule(
         input.kind === "update" &&
         input.content === undefined &&
         input.scope === undefined &&
+        input.title === undefined &&
+        input.gloss === undefined &&
         input.metadata === undefined
       ) {
         throw new MemoryProposalValidationError(
           "proposal",
-          "An update proposal must change content, scope, or metadata",
+          "An update proposal must change content, scope, title, gloss, or metadata",
         );
       }
+      if (input.title !== undefined) validateOptionalMemoryTitle(input.title);
+      if (input.gloss !== undefined) validateOptionalMemoryGloss(input.gloss);
 
       try {
         return await database.transaction(async (transaction) => {
@@ -411,9 +434,13 @@ export function createMemoryProposalsModule(
           let proposedContent: string;
           let proposedScope: MemoryScope;
           let proposedMetadata: Record<string, unknown>;
+          let proposedTitle: string | null;
+          let proposedGloss: string | null;
           let changesContent: boolean;
           let changesScope: boolean;
           let changesMetadata: boolean;
+          let changesTitle: boolean;
+          let changesGloss: boolean;
 
           if (input.kind === "create") {
             kind = "create";
@@ -422,9 +449,13 @@ export function createMemoryProposalsModule(
             proposedContent = input.content;
             proposedScope = input.scope ?? "shared";
             proposedMetadata = input.metadata ?? {};
+            proposedTitle = input.title ?? null;
+            proposedGloss = input.gloss ?? null;
             changesContent = true;
             changesScope = true;
             changesMetadata = true;
+            changesTitle = true;
+            changesGloss = true;
           } else {
             // Hold the target until this Proposal commits. A forget already under way
             // makes this wait and then find no row; a later one waits for this commit,
@@ -458,9 +489,14 @@ export function createMemoryProposalsModule(
             proposedContent = input.content ?? current.content;
             proposedScope = input.scope ?? current.scope;
             proposedMetadata = input.metadata ?? current.metadata;
+            // Only a change is stored: an update that keeps a title or gloss leaves it NULL.
+            proposedTitle = input.title ?? null;
+            proposedGloss = input.gloss ?? null;
             changesContent = input.content !== undefined;
             changesScope = input.scope !== undefined;
             changesMetadata = input.metadata !== undefined;
+            changesTitle = input.title !== undefined;
+            changesGloss = input.gloss !== undefined;
           }
 
           if (changesContent) prepareMemoryContent(proposedContent);
@@ -501,7 +537,7 @@ export function createMemoryProposalsModule(
             `SELECT *
              FROM lore.submit_memory_proposal(
                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
-               $11, $12, $13
+               $11, $12, $13, $14, $15, $16, $17
              )`,
             [
               actor.workspaceId,
@@ -517,6 +553,10 @@ export function createMemoryProposalsModule(
               changesContent,
               changesScope,
               changesMetadata,
+              proposedTitle,
+              changesTitle,
+              proposedGloss,
+              changesGloss,
             ],
           );
           const id = inserted.rows[0].id;
@@ -762,6 +802,8 @@ export function createMemoryProposalsModule(
                 {
                   content: current.proposed_content,
                   scope: current.proposed_scope,
+                  title: current.proposed_title,
+                  gloss: current.proposed_gloss,
                   metadata: current.proposed_metadata,
                 },
                 null,
@@ -778,6 +820,8 @@ export function createMemoryProposalsModule(
               {
                 ...(current.changes_content ? { content: current.proposed_content } : {}),
                 ...(current.changes_scope ? { scope: current.proposed_scope } : {}),
+                ...(current.changes_title ? { title: current.proposed_title } : {}),
+                ...(current.changes_gloss ? { gloss: current.proposed_gloss } : {}),
                 ...(current.changes_metadata ? { metadata: current.proposed_metadata } : {}),
               },
               current.base_memory_version,

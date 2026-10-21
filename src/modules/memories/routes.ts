@@ -13,6 +13,7 @@ import {
   parseMemoryInput,
   queryInteger,
   requiredString,
+  searchTranslations,
   uuidString,
 } from "@/server/api/input";
 import { memoryScope } from "@/server/api/shared-schemas";
@@ -43,6 +44,13 @@ export const memories = new Hono<ApiEnv>()
     const query = requestedQuery?.trim()
       ? requiredString(requestedQuery, "q", MEMORY_SEARCH_LIMITS.maximumQueryLength)
       : "";
+    const requestedTranslations = url.searchParams.getAll("translation");
+    if (requestedTranslations.length && !query) {
+      throw new BadRequestError("translation requires q");
+    }
+    const translations = requestedTranslations.length
+      ? searchTranslations(requestedTranslations, "translation")
+      : undefined;
     // A list and a search each take their own engine default and bound.
     const limits = query ? MEMORY_SEARCH_LIMITS : MEMORY_LIST_LIMITS;
     const limit = queryInteger(url, "limit", limits.defaultLimit, 1, limits.maximumLimit);
@@ -70,6 +78,7 @@ export const memories = new Hono<ApiEnv>()
         await observeOperation("memory.search", () =>
           memories.search(actor, {
             query,
+            translations,
             limit,
             metadataFilter: requestedMetadata,
             scope,

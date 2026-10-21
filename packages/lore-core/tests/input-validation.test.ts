@@ -16,17 +16,25 @@ import {
   insertMemoryLinksInTransaction,
   LoreConfigurationError,
   LoreValidationError,
+  MEMORY_GLOSS_LIMITS,
   MEMORY_METADATA_LIMITS,
+  MEMORY_SEARCH_LIMITS,
+  MEMORY_TITLE_LIMITS,
   MemoryContentValidationError,
   type MemoryStorageContext,
   memoryContentChunks,
+  memorySearchTranslations,
   type PostgresTransaction,
   prepareMemoryContent,
   queryInRecordBatches,
   RECORD_BATCH_LIMITS,
   transactionHandle,
+  validateMemoryGloss,
   validateMemoryLink,
   validateMemoryMetadata,
+  validateMemoryTitle,
+  validateOptionalMemoryGloss,
+  validateOptionalMemoryTitle,
 } from "../src/index";
 
 /** The validation failure `run` throws, which must be a LoreValidationError. */
@@ -133,6 +141,101 @@ describe("shared input rules", () => {
     expect(refusal(() => validateMemoryMetadata(over)).message).toBe(
       `metadata exceeds ${MEMORY_METADATA_LIMITS.maximumSerializedLength} characters`,
     );
+  });
+
+  test("a title is one line of 1 to 256 characters with one that is not whitespace", () => {
+    const maximum = MEMORY_TITLE_LIMITS.maximumCharacters;
+    // Stored as written: surrounding spaces stay, and the bound counts code points.
+    for (const title of [" Spaced title ", "x".repeat(maximum), "🧭".repeat(maximum), "a\u200Bb"]) {
+      expect(validateMemoryTitle(title)).toBe(title);
+    }
+    expect(validateOptionalMemoryTitle(null)).toBeNull();
+    expect(refusal(() => validateMemoryTitle(null)).message).toBe("title must be a string");
+    expect(refusal(() => validateMemoryTitle(42, "records[2].title"))).toMatchObject({
+      field: "records[2].title",
+      message: "records[2].title must be a string",
+    });
+    for (const title of ["x".repeat(maximum + 1), `${"🧭".repeat(maximum)}x`]) {
+      expect(refusal(() => validateMemoryTitle(title)).message).toBe(
+        `title may contain at most ${maximum} characters`,
+      );
+    }
+    // A UTF-16 length past twice the bound is refused before any count.
+    expect(refusal(() => validateMemoryTitle("x".repeat(10_000_000))).message).toBe(
+      `title may contain at most ${maximum} characters`,
+    );
+    // Controls, line breaks, and line and paragraph separators: a title is one line.
+    for (const title of [
+      "a\nb",
+      "a\rb",
+      "a\tb",
+      "a\u0000b",
+      "a\u007Fb",
+      "a\u0085b",
+      "a\u2028b",
+      "a\u2029b",
+    ]) {
+      expect(refusal(() => validateMemoryTitle(title)).message, JSON.stringify(title)).toBe(
+        "title must be one line without control characters",
+      );
+    }
+    for (const title of ["", " ", "\u00A0\u3000\uFEFF\u2009"]) {
+      expect(refusal(() => validateMemoryTitle(title)).message, JSON.stringify(title)).toBe(
+        "title must contain a character that is not whitespace",
+      );
+    }
+    expect(refusal(() => validateMemoryTitle("a\uD800b")).message).toBe(
+      "title contains invalid Unicode",
+    );
+  });
+
+  test("a gloss obeys the title's one-line rule under its own 512-character bound", () => {
+    const maximum = MEMORY_GLOSS_LIMITS.maximumCharacters;
+    expect(validateMemoryGloss("x".repeat(maximum))).toHaveLength(maximum);
+    expect(validateOptionalMemoryGloss(null)).toBeNull();
+    expect(refusal(() => validateMemoryGloss("x".repeat(maximum + 1)))).toMatchObject({
+      field: "gloss",
+      message: `gloss may contain at most ${maximum} characters`,
+    });
+    expect(refusal(() => validateMemoryGloss("a\nb", "records[1].gloss"))).toMatchObject({
+      field: "records[1].gloss",
+      message: "records[1].gloss must be one line without control characters",
+    });
+    expect(refusal(() => validateMemoryGloss("\u3000")).message).toBe(
+      "gloss must contain a character that is not whitespace",
+    );
+  });
+
+  test("a search's translations are a few trimmed queries, each bounded as the query is", () => {
+    const { maximumQueryLength, maximumTranslations } = MEMORY_SEARCH_LIMITS;
+    expect(memorySearchTranslations(undefined)).toEqual([]);
+    expect(memorySearchTranslations(["  部署失败 ", "échec"])).toEqual(["部署失败", "échec"]);
+    // The bound applies to the trimmed text, as it does to the query.
+    expect(memorySearchTranslations([` ${"t".repeat(maximumQueryLength)} `])[0]).toHaveLength(
+      maximumQueryLength,
+    );
+    expect(
+      memorySearchTranslations(Array.from({ length: maximumTranslations }, () => "t")),
+    ).toHaveLength(maximumTranslations);
+    expect(
+      refusal(() =>
+        memorySearchTranslations(Array.from({ length: maximumTranslations + 1 }, () => "t")),
+      ),
+    ).toMatchObject({
+      field: "translations",
+      message: `translations may hold at most ${maximumTranslations} queries`,
+    });
+    expect(refusal(() => memorySearchTranslations([" \u3000 "])).message).toBe(
+      "a translation must not be empty",
+    );
+    expect(
+      refusal(() => memorySearchTranslations(["t".repeat(maximumQueryLength + 1)])).message,
+    ).toBe(`a translation exceeds ${maximumQueryLength} characters`);
+    for (const value of ["部署失败", [7], [null]]) {
+      expect(
+        refusal(() => memorySearchTranslations(value as unknown as readonly string[])).message,
+      ).toBe("translations must be an array of strings");
+    }
   });
 
   test("bounded numbers take the fallback only when omitted", () => {
@@ -294,6 +397,11 @@ describe("Episode admission and reads", () => {
     expect((await asyncRefusal(evidence.search({ query: 42 as unknown as string }))).field).toBe(
       "query",
     );
+    // Translations are checked even when the query is blank, before any statement.
+    expect(
+      (await asyncRefusal(evidence.search({ query: "   ", translations: ["a", "b", "c", "d"] })))
+        .field,
+    ).toBe("translations");
     await expect(evidence.search({ query: "   " })).resolves.toEqual([]);
   });
 });
@@ -308,6 +416,47 @@ describe("the engine validates before it writes", () => {
     }).transaction;
     return { statements, transaction };
   }
+
+  test("writes refuse a title before any statement", async () => {
+    const primitives = createMemoryMutationPrimitives();
+    const { statements, transaction } = watchedTransaction();
+    const scope = { partitionId: untouchedStorage.partitionId, ownerId: untouchedStorage.ownerId };
+    expect(
+      await asyncRefusal(
+        primitives.insertMemoryInTransaction(transaction, scope, {
+          content: "A fact.",
+          title: "Two\nlines",
+        }),
+      ),
+    ).toMatchObject({ field: "title" });
+    expect(
+      await asyncRefusal(
+        primitives.updateMemoryInTransaction(transaction, scope, "id", { title: " " }),
+      ),
+    ).toMatchObject({ field: "title" });
+    expect(
+      await asyncRefusal(
+        primitives.insertMemoryInTransaction(transaction, scope, {
+          content: "一条事实。",
+          gloss: "x".repeat(513),
+        }),
+      ),
+    ).toMatchObject({ field: "gloss" });
+    expect(
+      await asyncRefusal(
+        primitives.insertMemoriesInTransaction(transaction, scope, [
+          {
+            id: "40000000-0000-4000-8000-000000000001",
+            scope: "shared",
+            title: "x".repeat(257),
+            content: "A fact.",
+            metadata: {},
+          },
+        ]),
+      ),
+    ).toMatchObject({ field: "records[0].title" });
+    expect(statements).toEqual([]);
+  });
 
   test("single writes refuse scope and metadata before any statement", async () => {
     const primitives = createMemoryMutationPrimitives();
@@ -360,6 +509,11 @@ describe("the engine validates before it writes", () => {
     );
     for (const limit of [0, 101, 1.5]) {
       expect((await asyncRefusal(memories.search({ query: "fact", limit }))).field).toBe("limit");
+    }
+    for (const query of ["fact", "   "]) {
+      expect(
+        (await asyncRefusal(memories.search({ query, translations: ["事实", " "] }))).field,
+      ).toBe("translations");
     }
   });
 

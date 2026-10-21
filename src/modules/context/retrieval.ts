@@ -48,6 +48,8 @@ export const CONTEXT_RETRIEVAL_REVISION = "joint-memory-code-v2";
 export interface RetrieveContextInput {
   query: string;
   memoryQuery?: string;
+  /** The Memory query in other languages; Memory search fuses them with it. */
+  memoryTranslations?: readonly string[];
   codeQuery?: string;
   repositoryKey?: string;
   commitOid?: string;
@@ -62,6 +64,8 @@ export interface RetrieveContextInput {
 export interface RetrievedMemoryContext {
   id: string;
   scope: MemoryScope;
+  title: string | null;
+  gloss: string | null;
   updatedAt: string;
   score: number;
   rerankScore?: number;
@@ -208,6 +212,19 @@ export async function contextualDependencyFingerprints(input: {
 
 function queryText(value: string, name: string, maximumLength: number): string {
   return validateQueryText(value, name, maximumLength, ContextRetrievalValidationError);
+}
+
+/** The Memory query's translations: at most the engine's number, each a valid query. */
+function memoryTranslations(value: readonly string[] | undefined): string[] {
+  if (value === undefined) return [];
+  if (value.length > MEMORY_SEARCH_LIMITS.maximumTranslations) {
+    throw new ContextRetrievalValidationError(
+      `memoryTranslations may hold at most ${MEMORY_SEARCH_LIMITS.maximumTranslations} queries`,
+    );
+  }
+  return value.map((translation) =>
+    queryText(translation, "memoryTranslations", MEMORY_SEARCH_LIMITS.maximumQueryLength),
+  );
 }
 
 function limit(value: number | undefined, fallback: number, maximum: number, name: string): number {
@@ -368,6 +385,7 @@ export function createContextRetrievalModule(
   return {
     async retrieve(actor, input) {
       const query = queryText(input.query, "query", MEMORY_SEARCH_LIMITS.maximumQueryLength);
+      const requestedTranslations = memoryTranslations(input.memoryTranslations);
       const repositoryKey =
         input.repositoryKey === undefined
           ? undefined
@@ -421,6 +439,8 @@ export function createContextRetrievalModule(
               MEMORY_SEARCH_LIMITS.maximumQueryLength,
             )
           : null;
+      // A packet that reads no Memory searches no translation either.
+      const translations = memoryQuery === null ? [] : requestedTranslations;
       const codeQuery =
         plan.route === "code-only" || plan.route === "both"
           ? queryText(input.codeQuery ?? query, "codeQuery", CODE_QUERY_MAXIMUM_LENGTH)
@@ -432,6 +452,7 @@ export function createContextRetrievalModule(
         memoryQuery !== null
           ? memories.search(admitted ?? actor, {
               query: memoryQuery,
+              translations,
               limit: memoryLimit,
               scope: input.scope,
               metadataFilter: input.metadata,
@@ -503,6 +524,8 @@ export function createContextRetrievalModule(
         .map(({ result }) => ({
           id: result.memory.id,
           scope: result.memory.scope,
+          title: result.memory.title,
+          gloss: result.memory.gloss,
           updatedAt: result.memory.updatedAt,
           score: result.score,
           ...(result.rerankScore === undefined ? {} : { rerankScore: result.rerankScore }),

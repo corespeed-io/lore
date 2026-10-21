@@ -15,7 +15,7 @@ import {
   uuidArray,
   uuidString,
 } from "@/server/api/input";
-import { memoryScope, metadata } from "@/server/api/shared-schemas";
+import { memoryGloss, memoryScope, memoryTitle, metadata } from "@/server/api/shared-schemas";
 import { NotFoundError } from "@/server/errors";
 import { observeOperation } from "@/server/telemetry/telemetry";
 import {
@@ -111,6 +111,8 @@ export const proposals = new Hono<ApiEnv>()
             kind: "create" as const,
             content: requiredMemoryContent(body.content),
             scope: memoryScope(body.scope),
+            title: memoryTitle(body.title),
+            gloss: memoryGloss(body.gloss),
             metadata: metadata(body.metadata),
             evidenceMemoryIds,
             evidenceObservationIds,
@@ -123,6 +125,8 @@ export const proposals = new Hono<ApiEnv>()
               expectedVersion: positiveInteger(body.expectedVersion, "expectedVersion"),
               content: body.content === undefined ? undefined : requiredMemoryContent(body.content),
               scope: memoryScope(body.scope),
+              title: memoryTitle(body.title),
+              gloss: memoryGloss(body.gloss),
               metadata: metadata(body.metadata),
               evidenceMemoryIds,
               evidenceObservationIds,

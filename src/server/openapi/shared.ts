@@ -1,4 +1,11 @@
-import { MEMORY_LINK_LIMITS, MEMORY_METADATA_LIMITS, MEMORY_SCOPES } from "@corespeed/lore-core";
+import {
+  MEMORY_GLOSS_LIMITS,
+  MEMORY_LINK_LIMITS,
+  MEMORY_METADATA_LIMITS,
+  MEMORY_SCOPES,
+  MEMORY_SEARCH_LIMITS,
+  MEMORY_TITLE_LIMITS,
+} from "@corespeed/lore-core";
 import { LORE_ERROR_CODES } from "@/server/errors";
 
 export const errorSchema = {
@@ -18,6 +25,40 @@ export const errorSchema = {
 
 /** A Memory scope; Episodes, Proposals, and archives carry the same value. */
 export const memoryScopeSchema = { type: "string", enum: [...MEMORY_SCOPES] } as const;
+
+/**
+ * A Memory title, or null for none; Proposals and archives carry the same value. The
+ * length counts code points; a title is one line with a character that is not
+ * whitespace, which the server checks.
+ */
+export const memoryTitleSchema = {
+  oneOf: [
+    { type: "string", minLength: 1, maxLength: MEMORY_TITLE_LIMITS.maximumCharacters },
+    { type: "null" },
+  ],
+} as const;
+
+/**
+ * A Memory gloss, an English rendering of content in another language, or null for
+ * none. One line; the length counts code points.
+ */
+export const memoryGlossSchema = {
+  oneOf: [
+    { type: "string", minLength: 1, maxLength: MEMORY_GLOSS_LIMITS.maximumCharacters },
+    { type: "null" },
+  ],
+} as const;
+
+/** What every search that takes translations says about them. */
+export const SEARCH_TRANSLATIONS_DESCRIPTION =
+  "The same question in other languages. Search runs each beside the query and fuses the results into one ranking, so it also finds what was written in those languages.";
+
+/** A search's translations: a few queries, each bounded as the query is. */
+export const searchTranslationsSchema = {
+  type: "array",
+  maxItems: MEMORY_SEARCH_LIMITS.maximumTranslations,
+  items: { type: "string", minLength: 1, maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength },
+} as const;
 
 /**
  * Metadata as every endpoint validates it: a JSON object whose serialization is

@@ -14,6 +14,8 @@ import {
   queryInRecordBatches,
   validateMemoryLink,
   validateMemoryScope,
+  validateOptionalMemoryGloss,
+  validateOptionalMemoryTitle,
 } from "@corespeed/lore-core";
 import { createMemoryMutationPrimitives } from "@/modules/memories/service";
 import { MemoryMetadataSchema } from "@/server/api/shared-schemas";
@@ -25,13 +27,15 @@ import {
   MAX_WORKSPACE_ARCHIVE_BYTES,
   MAX_WORKSPACE_ARCHIVE_LINKS,
   MAX_WORKSPACE_ARCHIVE_MEMORIES,
+  TITLED_WORKSPACE_ARCHIVE_FORMATS,
   WORKSPACE_ARCHIVE_FORMAT,
   WORKSPACE_ARCHIVE_FORMATS,
   type WorkspaceArchiveFormat,
 } from "./limits";
 
-// Upper bounds for each serialized record beyond its measured JSON content (or kind)
-// and metadata: ids, timestamps, version or weight, property names, and separators.
+// Upper bounds for each serialized record beyond its measured JSON content (or kind),
+// title, gloss, and metadata: ids, timestamps, version or weight, property names, and
+// separators.
 const ARCHIVE_MEMORY_OVERHEAD_BYTES = 256;
 const ARCHIVE_LINK_OVERHEAD_BYTES = 320;
 const ARCHIVE_MANIFEST_BYTES = 1_024;
@@ -56,6 +60,10 @@ export interface WorkspaceArchiveMemory {
   id: string;
   ownerUserId: string;
   scope: MemoryScope;
+  /** Present, string or null, in a format that carries titles (v3 on); absent before. */
+  title?: string | null;
+  /** Present, string or null, wherever `title` is; absent before v3. */
+  gloss?: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;
@@ -115,6 +123,8 @@ interface ExportMemoryRow {
   id: string;
   owner_user_id: string;
   scope: MemoryScope;
+  title: string | null;
+  gloss: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;
@@ -381,6 +391,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
   ) {
     throw new PortabilityValidationError("archive manifest counts do not match its records");
   }
+  const titled = TITLED_WORKSPACE_ARCHIVE_FORMATS.includes(archive.manifest.format);
   const memoryIds = new Set<string>();
   const normalizedMemories: NormalizedArchiveMemory[] = [];
   for (const [index, memory] of archive.memories.entries()) {
@@ -392,6 +403,32 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     memoryIds.add(id);
     const ownerUserId = uuid(memory.ownerUserId, `memories[${index}].ownerUserId`);
     const scope = archiveRule(() => validateMemoryScope(memory.scope, `memories[${index}].scope`));
+    // A titled format states every title and gloss, null for none; an earlier one has
+    // none to state, and one it carried anyway would be lost to an older importer.
+    let title: string | null = null;
+    let gloss: string | null = null;
+    if (titled) {
+      if (memory.title === undefined) {
+        throw new PortabilityValidationError(`memories[${index}].title is required`);
+      }
+      if (memory.gloss === undefined) {
+        throw new PortabilityValidationError(`memories[${index}].gloss is required`);
+      }
+      title = archiveRule(() =>
+        validateOptionalMemoryTitle(memory.title, `memories[${index}].title`),
+      );
+      gloss = archiveRule(() =>
+        validateOptionalMemoryGloss(memory.gloss, `memories[${index}].gloss`),
+      );
+    } else {
+      for (const name of ["title", "gloss"] as const) {
+        if (memory[name] !== undefined) {
+          throw new PortabilityValidationError(
+            `memories[${index}].${name} requires format ${TITLED_WORKSPACE_ARCHIVE_FORMATS.join(" or ")}`,
+          );
+        }
+      }
+    }
     // Chunking is the content rule. Keep the result so the insert does not chunk again.
     let preparedContent: PreparedMemoryContent;
     try {
@@ -414,6 +451,8 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
       id,
       ownerUserId,
       scope,
+      title,
+      gloss,
       content: memory.content,
       preparedContent,
       metadata: normalizedMetadata,
@@ -536,6 +575,8 @@ export function createPortabilityModule(
           `WITH sized AS (
              SELECT id,
                     octet_length(to_json(content)::text) + octet_length(metadata::text)
+                      + coalesce(octet_length(to_json(title)::text), 4)
+                      + coalesce(octet_length(to_json(gloss)::text), 4)
                       + $4::integer AS record_bytes
              FROM memories
              WHERE workspace_id = $1
@@ -545,7 +586,8 @@ export function createPortabilityModule(
              SELECT id, record_bytes, sum(record_bytes) OVER (ORDER BY id) AS running_bytes
              FROM sized
            )
-           SELECT memory.id, memory.owner_user_id, memory.scope, memory.content,
+           SELECT memory.id, memory.owner_user_id, memory.scope, memory.title, memory.gloss,
+                  memory.content,
                   memory.metadata, memory.version, memory.created_at, memory.updated_at,
                   budgeted.running_bytes::float8 AS running_bytes
            FROM budgeted
@@ -632,6 +674,8 @@ export function createPortabilityModule(
           id: memory.id,
           ownerUserId: memory.owner_user_id,
           scope: memory.scope,
+          title: memory.title,
+          gloss: memory.gloss,
           content: memory.content,
           metadata: memory.metadata,
           version: memory.version,
@@ -787,6 +831,8 @@ export function createPortabilityModule(
           targets.map(({ memory, targetId }) => ({
             id: targetId,
             scope: memory.scope,
+            title: memory.title ?? null,
+            gloss: memory.gloss ?? null,
             content: memory.content,
             preparedContent: memory.preparedContent,
             metadata: memory.metadata,

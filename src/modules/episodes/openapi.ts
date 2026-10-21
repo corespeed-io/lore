@@ -16,6 +16,8 @@ import {
   memoryScopeSchema,
   metadataSchema,
   requestBody,
+  SEARCH_TRANSLATIONS_DESCRIPTION,
+  searchTranslationsSchema,
   workspaceHeader,
 } from "@/server/openapi/shared";
 
@@ -225,6 +227,7 @@ const recordingSchemas = {
     required: ["query"],
     properties: {
       query: { type: "string", maxLength: MEMORY_SEARCH_LIMITS.maximumQueryLength },
+      translations: { ...searchTranslationsSchema, description: SEARCH_TRANSLATIONS_DESCRIPTION },
       limit: {
         type: "integer",
         minimum: 1,

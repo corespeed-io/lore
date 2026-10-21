@@ -251,7 +251,8 @@ export function lexicalCandidatesStatement(
 
 /**
  * The lexical channels as the engine's search statement ran them on the tables
- * through schema revision 11, which is what `lore.lexical_candidates` must answer:
+ * through schema revision 11, plus the name channels of revision 15, which is what
+ * `lore.lexical_candidates` must answer:
  * the same chunks, with the same ranks, in every channel, for the same caller. Run in
  * a host transaction, it applies the host's access policy the way that statement
  * did (for lore oss, RLS as lore_app), and the host's function must apply the same
@@ -366,12 +367,86 @@ export function referenceLexicalCandidates(
        ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
                 memory.updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT $3
+     ),
+     -- The name channels (schema revision 15): the content channels over the
+     -- Memory's title and gloss joined by a space, each answering its first chunk.
+     name_simple_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY ts_rank_cd(to_tsvector('simple', concat_ws(' ', memory.title, memory.gloss)), websearch_to_tsquery('simple', $1), 32) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM memories memory
+       JOIN memory_chunks chunk
+         ON chunk.memory_id = memory.id AND chunk.workspace_id = memory.workspace_id
+        AND chunk.ordinal = 0
+       WHERE memory.workspace_id = $2::uuid AND ${filter}
+         AND to_tsvector('simple', concat_ws(' ', memory.title, memory.gloss)) @@ websearch_to_tsquery('simple', $1)
+       ORDER BY ts_rank_cd(to_tsvector('simple', concat_ws(' ', memory.title, memory.gloss)), websearch_to_tsquery('simple', $1), 32) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     name_english_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY ts_rank_cd(to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)), websearch_to_tsquery('english', $1), 32) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM memories memory
+       JOIN memory_chunks chunk
+         ON chunk.memory_id = memory.id AND chunk.workspace_id = memory.workspace_id
+        AND chunk.ordinal = 0
+       WHERE memory.workspace_id = $2::uuid AND ${filter}
+         AND to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)) @@ websearch_to_tsquery('english', $1)
+       ORDER BY ts_rank_cd(to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)), websearch_to_tsquery('english', $1), 32) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     name_relaxed_english_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY sum(ts_rank_cd(to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)), term.query, 32) * term.weight) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM memories memory
+       JOIN memory_chunks chunk
+         ON chunk.memory_id = memory.id AND chunk.workspace_id = memory.workspace_id
+        AND chunk.ordinal = 0
+       JOIN english_query_terms term ON to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)) @@ term.query
+       WHERE memory.workspace_id = $2::uuid AND ${filter}
+       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
+       HAVING count(*) >= 2
+       ORDER BY sum(ts_rank_cd(to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)), term.query, 32) * term.weight) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
+     ),
+     name_cjk_lexical AS (
+       SELECT chunk.id AS chunk_id, memory.id AS memory_id,
+         row_number() OVER (
+           ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
+                    memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM unnest($11::text[]) AS gram(gram)
+       JOIN memories memory ON concat_ws(' ', memory.title, memory.gloss) LIKE ('%' || gram.gram || '%')
+       JOIN memory_chunks chunk
+         ON chunk.memory_id = memory.id AND chunk.workspace_id = memory.workspace_id
+        AND chunk.ordinal = 0
+       WHERE memory.workspace_id = $2::uuid AND ${filter}
+       GROUP BY chunk.id, memory.id, chunk.ordinal, memory.updated_at
+       HAVING count(*) >= least(2, cardinality($11::text[]))
+       ORDER BY sum(char_length(gram.gram)) DESC, count(*) DESC,
+                memory.updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $3
      )
      SELECT 'simple' AS channel, chunk_id, memory_id, candidate_rank FROM simple_lexical
      UNION ALL SELECT 'english', chunk_id, memory_id, candidate_rank FROM english_lexical
      UNION ALL SELECT 'relaxed_english', chunk_id, memory_id, candidate_rank FROM relaxed_english_lexical
      UNION ALL SELECT 'entity_alias', chunk_id, memory_id, candidate_rank FROM entity_alias_lexical
      UNION ALL SELECT 'cjk', chunk_id, memory_id, candidate_rank FROM cjk_lexical
+     UNION ALL SELECT 'name_simple', chunk_id, memory_id, candidate_rank FROM name_simple_lexical
+     UNION ALL SELECT 'name_english', chunk_id, memory_id, candidate_rank FROM name_english_lexical
+     UNION ALL SELECT 'name_relaxed_english', chunk_id, memory_id, candidate_rank FROM name_relaxed_english_lexical
+     UNION ALL SELECT 'name_cjk', chunk_id, memory_id, candidate_rank FROM name_cjk_lexical
      ORDER BY channel, candidate_rank`,
     [
       values.query,

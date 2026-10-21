@@ -658,9 +658,13 @@ export interface components {
                 /** @constant */
                 readonly idempotency: true;
                 /** @constant */
+                readonly memoryGlosses: true;
+                /** @constant */
                 readonly memoryLinks: true;
                 /** @constant */
                 readonly memoryProposals: true;
+                /** @constant */
+                readonly memoryTitles: true;
                 /** @constant */
                 readonly observationEvidence: true;
                 /** @constant */
@@ -694,6 +698,8 @@ export interface components {
                 /** @constant */
                 readonly memoryContentRecommendedCharacters: 8000;
                 /** @constant */
+                readonly memoryGlossCharacters: 512;
+                /** @constant */
                 readonly memoryLinkKindsPerPair: 16;
                 /** @constant */
                 readonly memoryLinkList: 100;
@@ -715,6 +721,8 @@ export interface components {
                 readonly memoryProposalPending: 100;
                 /** @constant */
                 readonly memoryProposalRetentionSeconds: 2592000;
+                /** @constant */
+                readonly memoryTitleCharacters: 256;
                 /** @constant */
                 readonly observationBatchRead: 50;
                 /** @constant */
@@ -886,6 +894,7 @@ export interface components {
         };
         readonly CreateMemoryInput: {
             readonly content: string;
+            readonly gloss?: string | null;
             readonly metadata?: {
                 readonly [key: string]: components["schemas"]["JsonValue"];
             };
@@ -894,6 +903,7 @@ export interface components {
              * @enum {string}
              */
             readonly scope?: "shared" | "private";
+            readonly title?: string | null;
         };
         readonly CreateMemoryProposalCreateInput: {
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
@@ -903,6 +913,7 @@ export interface components {
             readonly evidenceMemoryIds?: readonly string[];
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
+            readonly gloss?: string | null;
             /** @constant */
             readonly kind: "create";
             readonly metadata?: {
@@ -913,9 +924,10 @@ export interface components {
              * @enum {string}
              */
             readonly scope?: "shared" | "private";
+            readonly title?: string | null;
         };
         readonly CreateMemoryProposalInput: components["schemas"]["CreateMemoryProposalCreateInput"] | components["schemas"]["CreateMemoryProposalUpdateInput"];
-        readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
+        readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateTitleInput"] | components["schemas"]["MemoryProposalUpdateGlossInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
         readonly EnqueueCodeIndexInput: {
             readonly commitOid: string;
             readonly repositoryKey: string;
@@ -1108,6 +1120,7 @@ export interface components {
             /** Format: date-time */
             readonly createdAt: string;
             readonly createdByAgentId: string | null;
+            readonly gloss: string | null;
             /** Format: uuid */
             readonly id: string;
             readonly metadata: {
@@ -1117,6 +1130,7 @@ export interface components {
             readonly ownerUserId: string;
             /** @enum {string} */
             readonly scope: "shared" | "private";
+            readonly title: string | null;
             /** Format: date-time */
             readonly updatedAt: string;
             readonly version: number;
@@ -1244,11 +1258,15 @@ export interface components {
             readonly proposedByActorKind: "human" | "agent";
             readonly proposedByAgentId: string | null;
             readonly proposedContent: string;
+            /** @description The gloss a create gives its Memory (null for none), or the gloss an update sets (null removes it). Absent from an update that keeps the target's gloss. */
+            readonly proposedGloss?: string | null;
             readonly proposedMetadata: {
                 readonly [key: string]: unknown;
             };
             /** @enum {string} */
             readonly proposedScope: "shared" | "private";
+            /** @description The title a create gives its Memory (null for none), or the title an update sets (null removes it). Absent from an update that keeps the target's title. */
+            readonly proposedTitle?: string | null;
             readonly reviewedAt: string | null;
             readonly reviewedByUserId: string | null;
             /** @enum {string} */
@@ -1290,6 +1308,7 @@ export interface components {
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
+            readonly gloss?: string | null;
             /** @constant */
             readonly kind: "update";
             readonly metadata?: {
@@ -1299,6 +1318,28 @@ export interface components {
             readonly scope?: "shared" | "private";
             /** Format: uuid */
             readonly targetMemoryId: string;
+            readonly title?: string | null;
+        };
+        readonly MemoryProposalUpdateGlossInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
+            readonly content?: string;
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
+            readonly expectedVersion: number;
+            readonly gloss: string | null;
+            /** @constant */
+            readonly kind: "update";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
+            /** Format: uuid */
+            readonly targetMemoryId: string;
+            readonly title?: string | null;
         };
         readonly MemoryProposalUpdateMetadataInput: {
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
@@ -1309,6 +1350,7 @@ export interface components {
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
+            readonly gloss?: string | null;
             /** @constant */
             readonly kind: "update";
             readonly metadata: {
@@ -1318,6 +1360,7 @@ export interface components {
             readonly scope?: "shared" | "private";
             /** Format: uuid */
             readonly targetMemoryId: string;
+            readonly title?: string | null;
         };
         readonly MemoryProposalUpdateScopeInput: {
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
@@ -1328,6 +1371,7 @@ export interface components {
             /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
             readonly evidenceObservationIds?: readonly string[];
             readonly expectedVersion: number;
+            readonly gloss?: string | null;
             /** @constant */
             readonly kind: "update";
             readonly metadata?: {
@@ -1337,6 +1381,28 @@ export interface components {
             readonly scope: "shared" | "private";
             /** Format: uuid */
             readonly targetMemoryId: string;
+            readonly title?: string | null;
+        };
+        readonly MemoryProposalUpdateTitleInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
+            readonly content?: string;
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
+            readonly expectedVersion: number;
+            readonly gloss?: string | null;
+            /** @constant */
+            readonly kind: "update";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
+            /** Format: uuid */
+            readonly targetMemoryId: string;
+            readonly title: string | null;
         };
         readonly MemorySearchResult: {
             readonly evidence: string;
@@ -1454,6 +1520,8 @@ export interface components {
             /** @default 5 */
             readonly memoryLimit?: number;
             readonly memoryQuery?: string;
+            /** @description The Memory query in other languages. The same question in other languages. Search runs each beside the query and fuses the results into one ranking, so it also finds what was written in those languages. */
+            readonly memoryTranslations?: readonly string[];
             readonly metadata?: {
                 readonly [key: string]: unknown;
             };
@@ -1509,12 +1577,14 @@ export interface components {
         };
         readonly RetrievedMemoryContext: {
             readonly evidence: string;
+            readonly gloss: string | null;
             /** Format: uuid */
             readonly id: string;
             readonly rerankScore?: number;
             /** @enum {string} */
             readonly scope: "shared" | "private";
             readonly score: number;
+            readonly title: string | null;
             /** Format: date-time */
             readonly updatedAt: string;
         };
@@ -1531,6 +1601,8 @@ export interface components {
             readonly query: string;
             /** @enum {string} */
             readonly scope?: "shared" | "private";
+            /** @description The same question in other languages. Search runs each beside the query and fuses the results into one ranking, so it also finds what was written in those languages. */
+            readonly translations?: readonly string[];
         };
         readonly UpdateAgentInput: {
             readonly name?: string;
@@ -1539,11 +1611,13 @@ export interface components {
         };
         readonly UpdateMemoryInput: {
             readonly content?: string;
+            readonly gloss?: string | null;
             readonly metadata?: {
                 readonly [key: string]: components["schemas"]["JsonValue"];
             };
             /** @enum {string} */
             readonly scope?: "shared" | "private";
+            readonly title?: string | null;
         };
         readonly Workspace: {
             /** Format: date-time */
@@ -1598,10 +1672,10 @@ export interface components {
             /** Format: date-time */
             readonly exportedAt: string;
             /**
-             * @description Import accepts every listed format; export writes lore-workspace-v2.
+             * @description Import accepts every listed format; export writes lore-workspace-v3.
              * @enum {string}
              */
-            readonly format: "lore-workspace-v1" | "lore-workspace-v2";
+            readonly format: "lore-workspace-v1" | "lore-workspace-v2" | "lore-workspace-v3";
             readonly linkCount: number;
             readonly memoryCount: number;
             /** Format: uuid */
@@ -1615,6 +1689,8 @@ export interface components {
             readonly content: string;
             /** Format: date-time */
             readonly createdAt: string;
+            /** @description Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a gloss. */
+            readonly gloss?: string | null;
             /** Format: uuid */
             readonly id: string;
             readonly metadata: {
@@ -1624,6 +1700,8 @@ export interface components {
             readonly ownerUserId: string;
             /** @enum {string} */
             readonly scope: "shared" | "private";
+            /** @description Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a title. */
+            readonly title?: string | null;
             /** Format: date-time */
             readonly updatedAt: string;
             readonly version: number;
@@ -2433,6 +2511,8 @@ export interface operations {
                 readonly offset?: number;
                 readonly q?: string;
                 readonly scope?: "shared" | "private";
+                /** @description The same question in other languages. Search runs each beside the query and fuses the results into one ranking, so it also finds what was written in those languages. Repeat it for each language; it requires q. */
+                readonly translation?: readonly string[];
                 /** @description Inclusive lower bound for Memory updated_at. */
                 readonly updated_after?: string;
                 /** @description Exclusive upper bound for Memory updated_at. */

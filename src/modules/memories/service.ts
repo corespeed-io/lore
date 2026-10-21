@@ -24,6 +24,8 @@ import {
   type MemoryMutationOptions as VersionOptions,
   validateMemoryMetadata,
   validateMemoryScope,
+  validateOptionalMemoryGloss,
+  validateOptionalMemoryTitle,
 } from "@corespeed/lore-core";
 import {
   beginMutation,
@@ -157,6 +159,8 @@ export function writtenMemoryReplayBody(memoryId: string): SqlReplayBody {
              'ownerUserId', written ->> 'owner_user_id',
              'createdByAgentId', written -> 'created_by_agent_id',
              'scope', written ->> 'scope',
+             'title', written -> 'title',
+             'gloss', written -> 'gloss',
              'content', written ->> 'content',
              'metadata', written -> 'metadata',
              'version', (written ->> 'version')::integer,
@@ -263,12 +267,16 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       if (
         input.content === undefined &&
         input.scope === undefined &&
+        input.title === undefined &&
+        input.gloss === undefined &&
         input.metadata === undefined
       ) {
         return this.retrieve(actor, id);
       }
       // Refused before any statement, as the engine's own update refuses it.
       if (input.scope !== undefined) validateMemoryScope(input.scope);
+      if (input.title !== undefined) validateOptionalMemoryTitle(input.title);
+      if (input.gloss !== undefined) validateOptionalMemoryGloss(input.gloss);
       if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
       const keyed = Boolean(options.idempotency);
       try {

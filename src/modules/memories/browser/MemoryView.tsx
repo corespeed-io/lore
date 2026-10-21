@@ -18,6 +18,7 @@ import {
   memoryBody,
   memoryConfiguredTitle,
   memoryDetailTitle,
+  memoryGloss,
   memoryMetadataText,
   memorySource,
   memoryType,
@@ -225,10 +226,11 @@ export function MemoryView({
     updatedAt,
     version,
   } = memory;
-  // A configured title may run to 100,000 characters, and parses whole here.
+  // A title runs to 256 characters and parses whole here.
   const title = useMemo(() => memoryDetailTitle(memory), [memory]);
   // Shown as written, since the title above reads only its words.
   const configuredTitle = useMemo(() => memoryConfiguredTitle(memory), [memory]);
+  const gloss = useMemo(() => memoryGloss(memory), [memory]);
   const type = memoryType(memory);
   // The Type property reads whole, as the configured title does; the badge is a label.
   const typeText = useMemo(() => revealHidden(memoryType(memory)), [memory]);
@@ -311,6 +313,12 @@ export function MemoryView({
                 <div className="property-row">
                   <dt>Title</dt>
                   <dd>{configuredTitle}</dd>
+                </div>
+              )}
+              {gloss !== null && (
+                <div className="property-row">
+                  <dt>English gloss</dt>
+                  <dd>{gloss}</dd>
                 </div>
               )}
               <div className="property-row">

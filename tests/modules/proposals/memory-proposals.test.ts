@@ -934,3 +934,208 @@ test("Proposal lists stay scoped when one owner belongs to two Workspaces", asyn
 
   await testContext.close();
 });
+
+test("A create Proposal gives its Memory the proposed title, and a missing one none", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createProposalsHarness(testContext.database);
+  const titled = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The harbour chain is raised at dusk.",
+    title: "Harbour chain",
+  });
+  const untitled = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The lighthouse lamp is serviced monthly.",
+  });
+  expect(titled).toMatchObject({ proposedTitle: "Harbour chain" });
+  expect(untitled).toMatchObject({ proposedTitle: null });
+
+  const accepted = await memories.reviewProposal(testContext.alice, titled.id, "accept");
+  expect(accepted?.memory).toMatchObject({ title: "Harbour chain", version: 1 });
+  const plain = await memories.reviewProposal(testContext.alice, untitled.id, "accept");
+  expect(plain?.memory).toMatchObject({ title: null });
+  await testContext.close();
+});
+
+test("An update Proposal sets, removes, or keeps the target's title", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const target = await memories.remember(testContext.alice, {
+    content: "Night watch rotates every four hours.",
+    title: "Night watch",
+  });
+
+  // Only the title changes.
+  const renamed = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: target.id,
+    expectedVersion: 1,
+    title: "Night watch rotation",
+  });
+  expect(renamed).toMatchObject({ proposedTitle: "Night watch rotation" });
+  expect(
+    (await memories.reviewProposal(testContext.alice, renamed.id, "accept"))?.memory,
+  ).toMatchObject({ version: 2, title: "Night watch rotation", content: target.content });
+
+  // A content change says nothing of the title, which stays.
+  const rewritten = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: target.id,
+    expectedVersion: 2,
+    content: "Night watch rotates every three hours.",
+  });
+  expect(rewritten).not.toHaveProperty("proposedTitle");
+  expect(
+    (await memories.reviewProposal(testContext.alice, rewritten.id, "accept"))?.memory,
+  ).toMatchObject({ version: 3, title: "Night watch rotation" });
+
+  // Null removes it.
+  const removed = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: target.id,
+    expectedVersion: 3,
+    title: null,
+  });
+  expect(removed).toMatchObject({ proposedTitle: null });
+  expect(
+    (await memories.reviewProposal(testContext.alice, removed.id, "accept"))?.memory,
+  ).toMatchObject({ version: 4, title: null });
+
+  await expect(
+    memories.propose(testContext.alice, {
+      kind: "update",
+      targetMemoryId: target.id,
+      expectedVersion: 4,
+      title: "Two\nlines",
+    }),
+  ).rejects.toMatchObject({ field: "title" });
+  await testContext.close();
+});
+
+test("A Proposal submitted without a title, as revision 14 did, keeps the target's title", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const target = await memories.remember(testContext.alice, {
+    content: "Buoys are repainted before winter.",
+    title: "Buoy paint",
+  });
+  const legacyId = await testContext.database.transaction(async (transaction) => {
+    installActorContext(transaction, testContext.alice);
+    const result = await transaction.query<{ id: string }>(
+      `SELECT id FROM lore.submit_memory_proposal(
+         $1, $2, 'human', NULL, 'update', $3, 1, 'Buoys are repainted every autumn.',
+         'shared', '{}'::jsonb, true, false, false
+       )`,
+      [testContext.alice.workspaceId, testContext.alice.userId, target.id],
+    );
+    return result.rows[0]?.id ?? "";
+  });
+  const [listed] = await memories.listProposals(testContext.alice);
+  expect(listed?.id).toBe(legacyId);
+  expect(listed).not.toHaveProperty("proposedTitle");
+  expect(
+    (await memories.reviewProposal(testContext.alice, legacyId, "accept"))?.memory,
+  ).toMatchObject({
+    version: 2,
+    title: "Buoy paint",
+    content: "Buoys are repainted every autumn.",
+  });
+  await testContext.close();
+});
+
+test("Database review transition rejects a receipt whose title differs from the proposed one", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "Receipt titles must match.",
+    title: "Proposed title",
+  });
+  // A Memory with the proposed content but without its title, as an application that
+  // knows no titles would write on acceptance.
+  await testContext.database.transaction(async (transaction) => {
+    installActorContext(transaction, testContext.alice);
+    const written = await transaction.query<{ id: string }>(
+      `INSERT INTO memories (id, workspace_id, owner_user_id, scope, content, metadata)
+       VALUES (gen_random_uuid(), $1, $2, 'shared', 'Receipt titles must match.', '{}')
+       RETURNING id`,
+      [testContext.alice.workspaceId, testContext.alice.userId],
+    );
+    await expect(
+      transaction.query(
+        `UPDATE memory_proposals
+         SET status = 'accepted',
+             reviewed_by_user_id = $2,
+             accepted_memory_id = $3,
+             reviewed_at = now(),
+             expires_at = now() + interval '30 days'
+         WHERE id = $1`,
+        [proposal.id, testContext.alice.userId, written.rows[0]?.id],
+      ),
+    ).rejects.toThrow("Accepted create receipt must match the canonical Memory");
+  });
+  await testContext.close();
+});
+
+test("A Proposal carries an English gloss as it carries a title", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createProposalsHarness(testContext.database);
+  const created = await memories.propose(agentActor, {
+    kind: "create",
+    content: "港口的铁链在黄昏升起。",
+    gloss: "The harbour chain is raised at dusk",
+  });
+  expect(created).toMatchObject({
+    proposedTitle: null,
+    proposedGloss: "The harbour chain is raised at dusk",
+  });
+  const memory = (await memories.reviewProposal(testContext.alice, created.id, "accept"))?.memory;
+  expect(memory).toMatchObject({ title: null, gloss: "The harbour chain is raised at dusk" });
+  if (!memory) throw new Error("Expected the accepted Memory");
+
+  // An update that changes only the gloss keeps the title, and states no title.
+  const reglossed = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: memory.id,
+    expectedVersion: 1,
+    gloss: "The harbour chain goes up at dusk",
+  });
+  expect(reglossed).not.toHaveProperty("proposedTitle");
+  expect(reglossed).toMatchObject({ proposedGloss: "The harbour chain goes up at dusk" });
+  expect(
+    (await memories.reviewProposal(testContext.alice, reglossed.id, "accept"))?.memory,
+  ).toMatchObject({ version: 2, gloss: "The harbour chain goes up at dusk" });
+  await testContext.close();
+});
+
+test("Database review transition rejects a receipt whose gloss differs from the proposed one", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "收据必须一致。",
+    gloss: "Receipts must match",
+  });
+  await testContext.database.transaction(async (transaction) => {
+    installActorContext(transaction, testContext.alice);
+    const written = await transaction.query<{ id: string }>(
+      `INSERT INTO memories (id, workspace_id, owner_user_id, scope, content, metadata)
+       VALUES (gen_random_uuid(), $1, $2, 'shared', '收据必须一致。', '{}')
+       RETURNING id`,
+      [testContext.alice.workspaceId, testContext.alice.userId],
+    );
+    await expect(
+      transaction.query(
+        `UPDATE memory_proposals
+         SET status = 'accepted',
+             reviewed_by_user_id = $2,
+             accepted_memory_id = $3,
+             reviewed_at = now(),
+             expires_at = now() + interval '30 days'
+         WHERE id = $1`,
+        [proposal.id, testContext.alice.userId, written.rows[0]?.id],
+      ),
+    ).rejects.toThrow("Accepted create receipt must match the canonical Memory");
+  });
+  await testContext.close();
+});

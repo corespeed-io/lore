@@ -37,14 +37,14 @@ Commands:
   workspace list
   workspace create <name>
   memory list [--limit N] [--cursor CURSOR] [--offset N] [--scope shared|private]
-  memory search <query> [--limit N] [--scope shared|private]
-  memory search --stdin [--limit N] [--scope shared|private]
-  memory remember <content> [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
-  memory remember --stdin [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
-  memory propose create <content>|--stdin [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
-  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
+  memory search <query> [--translation TEXT]... [--limit N] [--scope shared|private]
+  memory search --stdin [--translation TEXT]... [--limit N] [--scope shared|private]
+  memory remember <content> [--scope shared|private] [--title TEXT] [--gloss TEXT] [--metadata JSON] [--idempotency-key KEY]
+  memory remember --stdin [--scope shared|private] [--title TEXT] [--gloss TEXT] [--metadata JSON] [--idempotency-key KEY]
+  memory propose create <content>|--stdin [--scope shared|private] [--title TEXT] [--gloss TEXT] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
+  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--title TEXT|--no-title] [--gloss TEXT|--no-gloss] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
   memory get <memory-id>
-  memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--metadata JSON] [--idempotency-key KEY]
+  memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--title TEXT|--no-title] [--gloss TEXT|--no-gloss] [--metadata JSON] [--idempotency-key KEY]
   memory forget <memory-id> --version N [--idempotency-key KEY]
   memory link <source-memory-id> <target-memory-id> [--kind KIND] [--weight N] [--metadata JSON]
   memory unlink <source-memory-id> <target-memory-id> [--kind KIND]
@@ -53,7 +53,7 @@ Commands:
   memory uncite <memory-id> <observation-id>
   memory evidence <memory-id>
   memory sources <memory-id>... [--max-characters N]
-  episode search <query>|--stdin [--limit N] [--scope shared|private] [--metadata JSON]
+  episode search <query>|--stdin [--translation TEXT]... [--limit N] [--scope shared|private] [--metadata JSON]
   episode index <episode-id>
   episode list [--limit N] [--cursor CURSOR] [--kind conversation|workflow|document|event] [--scope shared|private]
   episode record --stdin [--idempotency-key KEY]
@@ -80,7 +80,8 @@ Secrets are intentionally accepted only through environment variables. Prefer
 a mutation after an unknown response outcome. A Link is addressed by its source,
 target, and --kind (default: ${LORE_CONTRACT.defaults.memoryLinkKind}), so link is safe to repeat; it replaces an
 existing Link, so an omitted --weight becomes ${LORE_CONTRACT.defaults.memoryLinkWeight} and omitted --metadata becomes {}.
-A repeated unlink reports not_found once the Link is gone.
+A repeated unlink reports not_found once the Link is gone. Repeat --translation
+(at most ${LORE_CONTRACT.limits.memorySearchTranslations}) to search the same question in other languages; Lore returns one ranking.
 `;
 
 class CliUsageError extends Error {
@@ -88,6 +89,8 @@ class CliUsageError extends Error {
 }
 
 const MAX_MEMORY_CONTENT_CHARACTERS = MEMORY_CONTENT_LIMITS.maximumCharacters;
+const MAX_MEMORY_TITLE_CHARACTERS = LORE_CONTRACT.limits.memoryTitleCharacters;
+const MAX_MEMORY_GLOSS_CHARACTERS = LORE_CONTRACT.limits.memoryGlossCharacters;
 const MAX_PROPOSAL_EVIDENCE = LORE_CONTRACT.limits.memoryProposalEvidence;
 const CODE_EVIDENCE_RELATIONSHIPS = LORE_CONTRACT.vocabularies.codeEvidenceRelationships;
 type CodeEvidenceRelationship = (typeof CODE_EVIDENCE_RELATIONSHIPS)[number];
@@ -275,6 +278,39 @@ function optionScope(value: string | undefined): MemoryScope | undefined {
   );
 }
 
+/**
+ * A one-line `--title` or `--gloss`, checked against its published bound; the server
+ * trims it, so the bound applies to the trimmed text.
+ */
+function optionLine(
+  value: string | undefined,
+  name: "title" | "gloss",
+  maximum: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const line = value.trim();
+  if (!line) throw new CliUsageError(`--${name} must not be blank`);
+  if (Array.from(line).length > maximum) {
+    throw new CliUsageError(`--${name} may contain at most ${maximum} characters`);
+  }
+  return value;
+}
+
+/**
+ * An update's title or gloss change: `--title TEXT` sets it, `--no-title` removes it
+ * (null), and `--gloss` and `--no-gloss` do the same for the gloss.
+ */
+function optionLineChange(
+  value: string | undefined,
+  remove: boolean | undefined,
+  name: "title" | "gloss",
+  maximum: number,
+): string | null | undefined {
+  if (!remove) return optionLine(value, name, maximum);
+  if (value !== undefined) throw new CliUsageError(`--${name} and --no-${name} cannot be combined`);
+  return null;
+}
+
 function optionMetadata(value: string | undefined): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
   let parsed: unknown;
@@ -315,6 +351,7 @@ export async function runLoreCli(
       strict: true,
       options: {
         "allow-insecure": { type: "boolean" },
+        gloss: { type: "string" },
         content: { type: "string" },
         commit: { type: "string" },
         "code-evidence": { type: "string", multiple: true },
@@ -327,6 +364,8 @@ export async function runLoreCli(
         limit: { type: "string" },
         "max-characters": { type: "string" },
         metadata: { type: "string" },
+        "no-gloss": { type: "boolean" },
+        "no-title": { type: "boolean" },
         offset: { type: "string" },
         "observation-evidence": { type: "string", multiple: true },
         pretty: { type: "boolean" },
@@ -335,6 +374,8 @@ export async function runLoreCli(
         scope: { type: "string" },
         stdin: { type: "boolean" },
         symbol: { type: "string" },
+        title: { type: "string" },
+        translation: { type: "string", multiple: true },
         url: { type: "string" },
         version: { type: "string", short: "v" },
         weight: { type: "string" },
@@ -433,13 +474,14 @@ export async function runLoreCli(
     if (group === "episode" && action === "search") {
       const fromStdin = parsed.values.stdin === true;
       exactPositionals(parsed.positionals, fromStdin ? 2 : 3, "episode search <query>|--stdin");
-      allowedOptions(parsed.values, ["limit", "scope", "metadata", "stdin"]);
+      allowedOptions(parsed.values, ["limit", "scope", "metadata", "stdin", "translation"]);
       output(
         io,
         await workspace.searchEpisodeEvidence({
           query: fromStdin
             ? await stdinValue(io, LORE_CONTRACT.limits.memorySearchQueryLength, "query")
             : requiredPosition(parsed.positionals, 2, "query"),
+          translations: parsed.values.translation,
           limit: optionInteger(parsed.values.limit, "--limit"),
           scope: optionScope(parsed.values.scope),
           metadata: optionMetadata(parsed.values.metadata),
@@ -531,13 +573,14 @@ export async function runLoreCli(
     if (group === "memory" && action === "search") {
       const fromStdin = parsed.values.stdin === true;
       exactPositionals(parsed.positionals, fromStdin ? 2 : 3, "memory search <query>|--stdin");
-      allowedOptions(parsed.values, ["limit", "metadata", "scope", "stdin"]);
+      allowedOptions(parsed.values, ["limit", "metadata", "scope", "stdin", "translation"]);
       output(
         io,
         await workspace.searchMemories({
           query: fromStdin
             ? await stdinValue(io, LORE_CONTRACT.limits.memorySearchQueryLength, "query")
             : requiredPosition(parsed.positionals, 2, "query"),
+          translations: parsed.values.translation,
           limit: optionInteger(parsed.values.limit, "--limit"),
           scope: optionScope(parsed.values.scope),
           metadata: optionMetadata(parsed.values.metadata),
@@ -549,7 +592,14 @@ export async function runLoreCli(
     if (group === "memory" && action === "remember") {
       const fromStdin = parsed.values.stdin === true;
       exactPositionals(parsed.positionals, fromStdin ? 2 : 3, "memory remember <content>|--stdin");
-      allowedOptions(parsed.values, ["idempotency-key", "metadata", "scope", "stdin"]);
+      allowedOptions(parsed.values, [
+        "gloss",
+        "idempotency-key",
+        "metadata",
+        "scope",
+        "stdin",
+        "title",
+      ]);
       output(
         io,
         await workspace.remember(
@@ -558,6 +608,8 @@ export async function runLoreCli(
               ? await memoryContentFromStdin(io)
               : memoryContentValue(requiredPosition(parsed.positionals, 2, "content")),
             scope: optionScope(parsed.values.scope),
+            title: optionLine(parsed.values.title, "title", MAX_MEMORY_TITLE_CHARACTERS),
+            gloss: optionLine(parsed.values.gloss, "gloss", MAX_MEMORY_GLOSS_CHARACTERS),
             metadata: optionMetadata(parsed.values.metadata),
           },
           { idempotencyKey: parsed.values["idempotency-key"] },
@@ -582,11 +634,13 @@ export async function runLoreCli(
         allowedOptions(parsed.values, [
           "evidence",
           "code-evidence",
+          "gloss",
           "idempotency-key",
           "metadata",
           "observation-evidence",
           "scope",
           "stdin",
+          "title",
         ]);
         proposal = {
           kind: "create",
@@ -594,6 +648,8 @@ export async function runLoreCli(
             ? await memoryContentFromStdin(io)
             : memoryContentValue(requiredPosition(parsed.positionals, 3, "content")),
           scope: optionScope(parsed.values.scope),
+          title: optionLine(parsed.values.title, "title", MAX_MEMORY_TITLE_CHARACTERS),
+          gloss: optionLine(parsed.values.gloss, "gloss", MAX_MEMORY_GLOSS_CHARACTERS),
           metadata: optionMetadata(parsed.values.metadata),
           evidenceMemoryIds: optionEvidence(parsed.values.evidence),
           evidenceObservationIds: optionEvidence(
@@ -610,9 +666,13 @@ export async function runLoreCli(
           "evidence",
           "idempotency-key",
           "metadata",
+          "no-gloss",
+          "no-title",
           "observation-evidence",
           "scope",
           "stdin",
+          "title",
+          "gloss",
           "version",
         ]);
         const expectedVersion = optionInteger(parsed.values.version, "--version");
@@ -636,16 +696,33 @@ export async function runLoreCli(
             ? undefined
             : memoryContentValue(parsed.values.content);
         const scope = optionScope(parsed.values.scope);
+        const title = optionLineChange(
+          parsed.values.title,
+          parsed.values["no-title"],
+          "title",
+          MAX_MEMORY_TITLE_CHARACTERS,
+        );
+        const gloss = optionLineChange(
+          parsed.values.gloss,
+          parsed.values["no-gloss"],
+          "gloss",
+          MAX_MEMORY_GLOSS_CHARACTERS,
+        );
         const proposalMetadata = optionMetadata(parsed.values.metadata);
+        const rest = { title, gloss, metadata: proposalMetadata };
         if (content !== undefined) {
-          proposal = { ...updateBase, content, scope, metadata: proposalMetadata };
+          proposal = { ...updateBase, ...rest, content, scope };
         } else if (scope !== undefined) {
-          proposal = { ...updateBase, scope, metadata: proposalMetadata };
+          proposal = { ...updateBase, ...rest, scope };
+        } else if (title !== undefined) {
+          proposal = { ...updateBase, ...rest, title };
+        } else if (gloss !== undefined) {
+          proposal = { ...updateBase, ...rest, gloss };
         } else if (proposalMetadata !== undefined) {
           proposal = { ...updateBase, metadata: proposalMetadata };
         } else {
           throw new CliUsageError(
-            "memory propose update requires --content, --scope, or --metadata",
+            "memory propose update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, or --metadata",
           );
         }
       } else {
@@ -686,10 +763,14 @@ export async function runLoreCli(
       exactPositionals(parsed.positionals, 3, "memory update <memory-id> --version N");
       allowedOptions(parsed.values, [
         "content",
+        "gloss",
         "idempotency-key",
         "metadata",
+        "no-gloss",
+        "no-title",
         "scope",
         "stdin",
+        "title",
         "version",
       ]);
       if (parsed.values.stdin && parsed.values.content !== undefined) {
@@ -702,10 +783,24 @@ export async function runLoreCli(
             ? undefined
             : memoryContentValue(parsed.values.content),
         scope: optionScope(parsed.values.scope),
+        title: optionLineChange(
+          parsed.values.title,
+          parsed.values["no-title"],
+          "title",
+          MAX_MEMORY_TITLE_CHARACTERS,
+        ),
+        gloss: optionLineChange(
+          parsed.values.gloss,
+          parsed.values["no-gloss"],
+          "gloss",
+          MAX_MEMORY_GLOSS_CHARACTERS,
+        ),
         metadata: optionMetadata(parsed.values.metadata),
       };
       if (Object.values(update).every((value) => value === undefined)) {
-        throw new CliUsageError("memory update requires --content, --scope, or --metadata");
+        throw new CliUsageError(
+          "memory update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, or --metadata",
+        );
       }
       const expectedVersion = optionInteger(parsed.values.version, "--version");
       if (expectedVersion === undefined) {

@@ -8,7 +8,9 @@ import {
   humanSecurity,
   idempotencyHeader,
   jsonResponse,
+  memoryGlossSchema,
   memoryScopeSchema,
+  memoryTitleSchema,
   metadataSchema,
   requestBody,
   workspaceHeader,
@@ -40,6 +42,8 @@ const memoryProposalUpdateProperties = {
     maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
   },
   scope: memoryScopeSchema,
+  title: memoryTitleSchema,
+  gloss: memoryGlossSchema,
   metadata: metadataSchema,
   evidenceMemoryIds: {
     type: "array",
@@ -56,7 +60,7 @@ const memoryProposalUpdateProperties = {
   codeEvidence: proposalCodeEvidenceProperty,
 } as const;
 
-function memoryProposalUpdateVariant(change: "content" | "metadata" | "scope") {
+function memoryProposalUpdateVariant(change: "content" | "gloss" | "metadata" | "scope" | "title") {
   return {
     type: "object",
     additionalProperties: false,
@@ -163,6 +167,8 @@ export const proposalsSchemas = {
         maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
       },
       scope: { ...memoryScopeSchema, default: "shared" },
+      title: memoryTitleSchema,
+      gloss: memoryGlossSchema,
       metadata: metadataSchema,
       evidenceMemoryIds: {
         type: "array",
@@ -183,11 +189,15 @@ export const proposalsSchemas = {
     anyOf: [
       { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
       { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
+      { $ref: "#/components/schemas/MemoryProposalUpdateTitleInput" },
+      { $ref: "#/components/schemas/MemoryProposalUpdateGlossInput" },
       { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
     ],
   },
   MemoryProposalUpdateContentInput: memoryProposalUpdateVariant("content"),
   MemoryProposalUpdateScopeInput: memoryProposalUpdateVariant("scope"),
+  MemoryProposalUpdateTitleInput: memoryProposalUpdateVariant("title"),
+  MemoryProposalUpdateGlossInput: memoryProposalUpdateVariant("gloss"),
   MemoryProposalUpdateMetadataInput: memoryProposalUpdateVariant("metadata"),
   ProposeMemoryCodeEvidenceInput: {
     type: "object",
@@ -281,6 +291,16 @@ export const proposalsSchemas = {
         maxLength: MEMORY_CONTENT_LIMITS.maximumCharacters,
       },
       proposedScope: memoryScopeSchema,
+      proposedTitle: {
+        ...memoryTitleSchema,
+        description:
+          "The title a create gives its Memory (null for none), or the title an update sets (null removes it). Absent from an update that keeps the target's title.",
+      },
+      proposedGloss: {
+        ...memoryGlossSchema,
+        description:
+          "The gloss a create gives its Memory (null for none), or the gloss an update sets (null removes it). Absent from an update that keeps the target's gloss.",
+      },
       proposedMetadata: { type: "object", additionalProperties: true },
       evidenceMemoryIds: {
         type: "array",

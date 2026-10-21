@@ -19,6 +19,15 @@ function optionalString(body: Record<string, unknown>, name: string): string | u
   return value;
 }
 
+function optionalStrings(body: Record<string, unknown>, name: string): string[] | undefined {
+  const value = body[name];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new BadRequestError(`${name} must be an array of strings`);
+  }
+  return value;
+}
+
 function optionalInteger(body: Record<string, unknown>, name: string): number | undefined {
   const value = body[name];
   if (value === undefined) return undefined;
@@ -46,6 +55,7 @@ export const context = new Hono<ApiEnv>().post("/retrieve", async (c) => {
     context.retrieve(actor, {
       query: requiredString(body, "query"),
       memoryQuery: optionalString(body, "memoryQuery"),
+      memoryTranslations: optionalStrings(body, "memoryTranslations"),
       codeQuery: optionalString(body, "codeQuery"),
       repositoryKey: optionalString(body, "repositoryKey"),
       commitOid: optionalString(body, "commitOid"),

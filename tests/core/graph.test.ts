@@ -54,11 +54,13 @@ test("Memory Graph returns a durable directed Memory Link instead of affinity", 
   const graph = createMemoryGraphModule(testContext.database);
   const source = await memories.remember(testContext.alice, {
     content: "Orbital launch checklist for the shared mission.",
-    metadata: { title: "Launch checklist", reference: "launch/checklist" },
+    title: "Launch checklist",
+    metadata: { reference: "launch/checklist" },
   });
   const target = await memories.remember(testContext.alice, {
     content: "Orbital launch timeline for the shared mission.",
-    metadata: { title: "Launch timeline", legacy: { slug: "launch/timeline" } },
+    title: "Launch timeline",
+    metadata: { legacy: { slug: "launch/timeline" } },
   });
 
   await graph.connect(testContext.alice, {
@@ -317,11 +319,18 @@ function fillerWords(word: string, characters: number): string {
 async function seedGraphReadFixture(testContext: MemoryTestContext) {
   const memories = createMemoryModule(testContext.database);
   const graph = createMemoryGraphModule(testContext.database);
-  const fixture: Array<{ key: string; content: string; metadata?: Record<string, unknown> }> = [
+  const fixture: Array<{
+    key: string;
+    content: string;
+    title?: string;
+    metadata?: Record<string, unknown>;
+  }> = [
     {
       key: "titled",
       content: "Orbital launch checklist for the shared mission.",
-      metadata: { title: "  Launch\n checklist  ", reference: "launch/checklist", type: "plan" },
+      // The label collapses the spaces a title written through the engine keeps.
+      title: "  Launch   checklist  ",
+      metadata: { reference: "launch/checklist", type: "plan" },
     },
     {
       key: "legacy",
@@ -353,6 +362,7 @@ async function seedGraphReadFixture(testContext: MemoryTestContext) {
   for (const [index, entry] of fixture.entries()) {
     const memory = await memories.remember(testContext.alice, {
       content: entry.content,
+      ...(entry.title ? { title: entry.title } : {}),
       ...(entry.metadata ? { metadata: entry.metadata } : {}),
     });
     ids.set(entry.key, memory.id);
