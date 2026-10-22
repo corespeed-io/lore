@@ -169,6 +169,30 @@ describe("tiers", () => {
   });
 });
 
+describe("the Chinese LongMemEval-S questions", () => {
+  it("translate each standard-tier question once, from the pinned revision", async () => {
+    const file = (await Bun.file(
+      "evaluation/suites/longmemeval-s-questions-zh-v1.json",
+    ).json()) as {
+      source: { revision: string };
+      questions: Array<{ id: string; category: string; question: string; zh: string }>;
+    };
+    const manifest = (await Bun.file("evaluation/external/longmemeval.json").json()) as {
+      revision: string;
+    };
+    expect(file.source.revision).toBe(manifest.revision);
+    expect(new Set(file.questions.map((entry) => entry.id)).size).toBe(file.questions.length);
+    // The standard tier: 20 per category, seven categories.
+    const perCategory = new Map<string, number>();
+    for (const entry of file.questions) {
+      perCategory.set(entry.category, (perCategory.get(entry.category) ?? 0) + 1);
+      expect(entry.question.trim()).not.toBe("");
+      expect(entry.zh).toMatch(/[\u4e00-\u9fff]/);
+    }
+    expect([...perCategory.values()]).toEqual(Array.from({ length: 7 }, () => 20));
+  });
+});
+
 describe("the store and embedding cache", () => {
   it("hashes identities independently of key order", () => {
     expect(identityHash({ a: 1, b: { c: [1, 2], d: "x" } })).toBe(

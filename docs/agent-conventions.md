@@ -1822,6 +1822,10 @@ Benchmark is part of the product quality system even without AutoDream.
     every Memory first, as `lore_search` then `lore_read_evidence` returns them. Use it with `--dataset longmemeval-s-facts`, the frozen corpus's fact
     Memories (pinned export). The frozen corpus's tripwire fact restates the gold
     answer and is never a record.
+  - **Cross-language:** `--dataset longmemeval-s-zh` searches LongMemEval-S's own
+    corpus with each standard-tier question in Chinese
+    (`evaluation/suites/longmemeval-s-questions-zh-v1.json`, translated once,
+    English original beside it); the reader still gets the English question.
   - **Before claiming a change helps:** run `bun run eval gate --base
     origin/main --tier standard` and put the report in the PR.
 - `tools/evaluation/retrieval/run-memory-evidence.ts` pairs the frozen LongMemEval-S

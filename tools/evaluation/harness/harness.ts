@@ -149,8 +149,8 @@ export async function collect(input: CollectInput): Promise<string> {
     log: input.log,
   });
   const corpusKey = identityHash({
-    dataset: dataset.id,
-    revision: dataset.revision,
+    dataset: dataset.corpus?.id ?? dataset.id,
+    revision: dataset.corpus?.revision ?? dataset.revision,
     database: database.name,
     ingest: system.ingestIdentity(),
     code: corpusCode.digest,

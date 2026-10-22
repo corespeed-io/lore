@@ -23,6 +23,7 @@ import {
 import { datasetIsVerified, downloadDataset } from "../shared/dataset-download";
 import { type FileIntegrity, verifyFile } from "../shared/file-integrity";
 import { readJsonArray } from "../shared/json-array";
+import { sha256 } from "./hash";
 import type {
   CorpusRecord,
   Dataset,
@@ -127,6 +128,55 @@ export function longMemEvalS(): Dataset {
     async *units(caseIds) {
       for await (const record of source.records()) {
         if (caseIds.has(record.question_id)) yield source.unitFor(record);
+      }
+    },
+  };
+}
+
+/** The standard tier's LongMemEval-S questions, each translated once into Chinese. */
+const LONGMEMEVAL_ZH_PATH = "evaluation/suites/longmemeval-s-questions-zh-v1.json";
+
+interface LongMemEvalTranslation {
+  id: string;
+  question: string;
+  zh: string;
+}
+
+/**
+ * LongMemEval-S searched in Chinese: each translated question searches the same
+ * English sessions. Only the search query changes. The reader still gets the English
+ * question, so a score moves only with what search found, and the Units store
+ * LongMemEval-S's own records, so this reuses its corpus.
+ */
+export function longMemEvalSZh(): Dataset {
+  const source = longMemEvalSource();
+  const english = longMemEvalS();
+  const text = readFileSync(resolve(LONGMEMEVAL_ZH_PATH), "utf8");
+  const translations = new Map(
+    (JSON.parse(text) as { questions: LongMemEvalTranslation[] }).questions.map(
+      (entry) => [entry.id, entry] as const,
+    ),
+  );
+  return {
+    id: "longmemeval-s-zh",
+    revision: `${source.revision}:zh:${sha256(text)}`,
+    corpus: { id: english.id, revision: english.revision },
+    scorer: english.scorer,
+    reader: english.reader,
+    index: async () => (await source.index()).filter((entry) => translations.has(entry.id)),
+    async *units(caseIds) {
+      for await (const record of source.records()) {
+        if (!caseIds.has(record.question_id)) continue;
+        const translation = translations.get(record.question_id);
+        // A translation of another question would measure something else.
+        if (!translation || translation.question !== record.question) {
+          throw new Error(`${LONGMEMEVAL_ZH_PATH} does not translate ${record.question_id}`);
+        }
+        const unit = source.unitFor(record);
+        yield {
+          ...unit,
+          cases: unit.cases.map((evalCase) => ({ ...evalCase, searchQuery: translation.zh })),
+        };
       }
     },
   };
@@ -378,6 +428,7 @@ export function locomo(): Dataset {
 
 export const DATASETS = {
   "longmemeval-s": longMemEvalS,
+  "longmemeval-s-zh": longMemEvalSZh,
   "longmemeval-s-facts": longMemEvalSFacts,
   locomo,
 } as const;

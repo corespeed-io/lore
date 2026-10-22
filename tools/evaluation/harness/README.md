@@ -93,8 +93,18 @@ either path fails.
 | `--dataset` | Unit | Records | Score |
 | --- | --- | --- | --- |
 | `longmemeval-s` | one question | each session (split past 32k) | LongMemEval V1 rubric, judged |
+| `longmemeval-s-zh` | one standard-tier question | each session, LongMemEval-S's own corpus | the same, searched with the question in Chinese |
 | `longmemeval-s-facts` | one question | the session's extracted facts, citing the whole session as their source | the same |
 | `locomo` | one conversation | each dialog turn | token F1 |
+
+`longmemeval-s-zh` measures cross-language search: each standard-tier question,
+translated once into Chinese and pinned in
+`evaluation/suites/longmemeval-s-questions-zh-v1.json` with its English original,
+searches the English sessions. Only the search query changes; the reader still gets
+the English question, so a score moves only with what search found. Its Units store
+exactly LongMemEval-S's records, so it reuses that corpus (`Dataset.corpus`). It has
+140 cases: its standard and full tiers are the same, and its smoke tier is
+LongMemEval-S's.
 
 `longmemeval-s-facts` uses the frozen corpus's fact Memories (`longmemeval-facts-v1`,
 one extractor model and instruction). They are exported once, read-only, and

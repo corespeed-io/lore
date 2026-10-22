@@ -69,6 +69,11 @@ export interface Dataset {
   id: string;
   /** Pinned upstream revision and file digest; part of every corpus and run key. */
   revision: string;
+  /**
+   * The dataset whose corpus this one reuses, because its Units store exactly the same
+   * records; omitted for a dataset that keys its own corpus.
+   */
+  corpus?: { id: string; revision: string };
   scorer: ScorerId;
   /** Questions per category for a tier, where the dataset needs a different size. */
   tierSizes?: Partial<Record<"smoke" | "standard" | "full", number>>;
