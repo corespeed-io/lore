@@ -402,7 +402,10 @@ interface SearchStatementInput {
  * `lore.lexical_candidates`, whose answer must equal the reference channels in
  * `./testing` (`referenceLexicalCandidates`); the host runs them where its indexes
  * can serve them, which under RLS a query on the tables cannot. The semantic channel
- * runs here. Reciprocal-rank fusion (k = 60) scores each chunk across the channels.
+ * runs here. Reciprocal-rank fusion (k = 60) runs in two steps: the lexical channels
+ * fuse into one lexical ranking, and that ranking and the semantic channel then score
+ * each chunk as one vote each, so a match no lexical channel sees is not outvoted by
+ * one that several near-identical lexical channels all see.
  */
 function searchStatement(input: SearchStatementInput): PostgresStatement<SearchRow> {
   return statement<SearchRow>(
@@ -484,6 +487,21 @@ function searchStatement(input: SearchStatementInput): PostgresStatement<SearchR
                 chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT $4
      ),
+     lexical_family AS (
+       -- The lexical channels fuse into one ranking of chunks, ordered as the
+       -- semantic channel breaks its ties.
+       SELECT
+         chunk_id,
+         memory_id,
+         chunk_ordinal,
+         max(memory_updated_at) AS memory_updated_at,
+         row_number() OVER (
+           ORDER BY sum(1.0 / (60.0 + candidate_rank)) DESC,
+                    max(memory_updated_at) DESC, chunk_ordinal DESC, chunk_id
+         ) AS candidate_rank
+       FROM lexical_candidates
+       GROUP BY chunk_id, memory_id, chunk_ordinal
+     ),
      reciprocal_rank AS (
        SELECT
          chunk_id,
@@ -493,7 +511,7 @@ function searchStatement(input: SearchStatementInput): PostgresStatement<SearchR
          sum(1.0 / (60.0 + candidate_rank)) AS score
        FROM (
          SELECT chunk_id, memory_id, chunk_ordinal, memory_updated_at, candidate_rank
-         FROM lexical_candidates
+         FROM lexical_family
          UNION ALL
          SELECT chunk_id, memory_id, chunk_ordinal, memory_updated_at, candidate_rank
          FROM semantic_candidates
