@@ -92,6 +92,11 @@ export interface PacketItem {
   text: string;
   /** When the item's event happened, as its Memory states it; the reader sees it. */
   occurredAt?: string;
+  /** Experiment: when the item stopped being true, and the item that replaced it. */
+  validUntil?: string;
+  supersededBy?: string;
+  /** Experiment: the item this one replaced. */
+  supersedes?: string;
   /** Record keys this item came from, for retrieval metrics. */
   sourceKeys: string[];
 }

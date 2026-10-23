@@ -13,6 +13,10 @@ export interface BenchmarkReaderEvidence {
   text: string;
   /** When the evidence's event happened (its Memory's occurredAt), shown on its tag. */
   occurredAt?: string;
+  /** Experiment: when it stopped being true and what replaced it, shown on its tag. */
+  validUntil?: string;
+  supersededBy?: string;
+  supersedes?: string;
 }
 
 export interface BenchmarkReaderImage {
@@ -166,8 +170,13 @@ export function renderBenchmarkReaderInput(
   let remaining = Math.max(0, maximumCharacters - header.length - footer.length);
   const blocks: string[] = [];
   for (const [index, item] of evidence.entries()) {
-    const occurredAt = item.occurredAt ? ` occurred-at="${item.occurredAt}"` : "";
-    const prefix = `\n\n<evidence rank="${index + 1}" id="${item.id}"${occurredAt}>\n`;
+    const attributes = [
+      item.occurredAt ? ` occurred-at="${item.occurredAt}"` : "",
+      item.validUntil ? ` valid-until="${item.validUntil}"` : "",
+      item.supersededBy ? ` superseded-by="${item.supersededBy}"` : "",
+      item.supersedes ? ` supersedes="${item.supersedes}"` : "",
+    ].join("");
+    const prefix = `\n\n<evidence rank="${index + 1}" id="${item.id}"${attributes}>\n`;
     const suffix = "\n</evidence>";
     if (remaining <= prefix.length + suffix.length) break;
     const available = remaining - prefix.length - suffix.length;

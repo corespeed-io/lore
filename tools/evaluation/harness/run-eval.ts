@@ -52,6 +52,8 @@ import {
 import { createScorer } from "./scorers";
 import { sourceLayout } from "./source-layout";
 import { EvalStore, type RunEvent } from "./store";
+import { supersededMemorySearchSystem } from "./superseded";
+import { writtenSupersessionSystem } from "./supersession-writer";
 import { memorySearchSystem } from "./systems";
 import { isTier, type TierName } from "./tiers";
 import { warmFromDatabase } from "./warm";
@@ -123,6 +125,12 @@ function datasetsOption(): DatasetName[] {
 const SYSTEMS = {
   "memory-search": (store: EvalStore, geminiApiKey: string) =>
     memorySearchSystem({ store, geminiApiKey }),
+  "memory-search-superseded": (store: EvalStore, geminiApiKey: string) =>
+    supersededMemorySearchSystem({ store, geminiApiKey, mode: "mark" }),
+  "memory-search-superseded-follow": (store: EvalStore, geminiApiKey: string) =>
+    supersededMemorySearchSystem({ store, geminiApiKey, mode: "follow" }),
+  "memory-search-written-supersession": (store: EvalStore, geminiApiKey: string) =>
+    writtenSupersessionSystem({ store, geminiApiKey }),
   "memory-sources": (store: EvalStore, geminiApiKey: string) =>
     memorySourcesSystem({ store, geminiApiKey, layout: sourceLayout }),
 } as const;

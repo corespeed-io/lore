@@ -355,11 +355,16 @@ export async function answer(input: AnswerInput): Promise<void> {
   const prepared = pending.map(({ runId, result }) => {
     const evalCase = cases.get(result.caseId);
     if (!evalCase) throw new Error(`${result.caseId} is no longer in ${dataset.id}`);
-    const evidence = (packets.get(result.packetSha) ?? []).map(({ id, text, occurredAt }) => ({
-      id,
-      text,
-      ...(occurredAt ? { occurredAt } : {}),
-    }));
+    const evidence = (packets.get(result.packetSha) ?? []).map(
+      ({ id, text, occurredAt, validUntil, supersededBy, supersedes }) => ({
+        id,
+        text,
+        ...(occurredAt ? { occurredAt } : {}),
+        ...(validUntil ? { validUntil } : {}),
+        ...(supersededBy ? { supersededBy } : {}),
+        ...(supersedes ? { supersedes } : {}),
+      }),
+    );
     const rendered = reader.render(evalCase.readerQuestion, evidence);
     return {
       runId,
