@@ -96,7 +96,7 @@ const { values, positionals } = parseArgs({
     base: { type: "string" },
     candidate: { type: "string", default: "worktree" },
     reader: { type: "string", default: "gemini-3.5-flash" },
-    judge: { type: "string", default: "gpt-5.6-sol" },
+    judge: { type: "string", default: "gpt-5.6-luna" },
     "budget-usd": { type: "string", default: "10" },
     "ref-sha": { type: "string" },
     run: { type: "string" },

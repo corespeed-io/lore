@@ -20,6 +20,12 @@ export const READER_PROFILES = {
 export type ReaderProfileName = keyof typeof READER_PROFILES;
 
 export const JUDGE_PROFILES = {
+  /** GPT-5.6 Luna through a logged-in Codex CLI; the default judge since 2026-10-23. */
+  "gpt-5.6-luna": {
+    transport: "codex-exec-chatgpt",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "low",
+  },
   /** GPT-5.6-Sol through a logged-in Codex CLI; GPT-5.5 left ChatGPT Codex on 2026-10-14. */
   "gpt-5.6-sol": { transport: "codex-exec-chatgpt", model: "gpt-5.6-sol", reasoningEffort: "low" },
   /** The paper's judge model, through the Vercel AI Gateway (AI_GATEWAY_API_KEY). */
