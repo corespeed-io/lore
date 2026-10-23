@@ -18,6 +18,7 @@ import {
   LoreValidationError,
   MEMORY_GLOSS_LIMITS,
   MEMORY_METADATA_LIMITS,
+  MEMORY_OCCURRED_AT_LIMITS,
   MEMORY_SEARCH_LIMITS,
   MEMORY_TITLE_LIMITS,
   MemoryContentValidationError,
@@ -32,8 +33,10 @@ import {
   validateMemoryGloss,
   validateMemoryLink,
   validateMemoryMetadata,
+  validateMemoryOccurredAt,
   validateMemoryTitle,
   validateOptionalMemoryGloss,
+  validateOptionalMemoryOccurredAt,
   validateOptionalMemoryTitle,
 } from "../src/index";
 
@@ -204,6 +207,58 @@ describe("shared input rules", () => {
     expect(refusal(() => validateMemoryGloss("\u3000")).message).toBe(
       "gloss must contain a character that is not whitespace",
     );
+  });
+
+  test("an occurredAt is an RFC 3339 date-time with an offset, kept as its UTC instant", () => {
+    expect(validateMemoryOccurredAt("2023-05-26T10:00:00Z")).toBe("2023-05-26T10:00:00.000Z");
+    // The offset is applied, not dropped; lowercase t and z are RFC 3339 too.
+    expect(validateMemoryOccurredAt("2023-05-26T18:00:00+08:00")).toBe("2023-05-26T10:00:00.000Z");
+    expect(validateMemoryOccurredAt("2023-05-26t03:30:00-06:30")).toBe("2023-05-26T10:00:00.000Z");
+    // Kept to the millisecond.
+    expect(validateMemoryOccurredAt("2023-05-26T10:00:00.123456Z")).toBe(
+      "2023-05-26T10:00:00.123Z",
+    );
+    expect(validateMemoryOccurredAt("2024-02-29T00:00:00Z")).toBe("2024-02-29T00:00:00.000Z");
+    // Years below 100 are themselves, not 1900 through 1999.
+    expect(validateMemoryOccurredAt("0099-03-01T00:00:00Z")).toBe("0099-03-01T00:00:00.000Z");
+    expect(validateMemoryOccurredAt("0001-01-01T00:00:00Z")).toBe("0001-01-01T00:00:00.000Z");
+    expect(validateMemoryOccurredAt("9999-12-31T23:59:59.999Z")).toBe("9999-12-31T23:59:59.999Z");
+    expect(validateOptionalMemoryOccurredAt(null)).toBeNull();
+    const format =
+      "occurredAt must be an RFC 3339 date-time with an offset, such as 2023-05-26T10:00:00Z";
+    for (const value of [
+      "",
+      "2023-05-26",
+      "2023-05-26T10:00Z",
+      "2023-05-26T10:00:00",
+      " 2023-05-26T10:00:00Z",
+      "2023-05-26 10:00:00Z",
+      "May 26, 2023 10:00 UTC",
+      "2023-02-29T00:00:00Z",
+      "2023-04-31T00:00:00Z",
+      "2023-13-01T00:00:00Z",
+      "2023-05-26T24:00:00Z",
+      "2023-05-26T23:59:60Z",
+      "2023-05-26T10:00:00+24:00",
+      "２０２３-05-26T10:00:00Z",
+    ]) {
+      expect(refusal(() => validateMemoryOccurredAt(value)).message, JSON.stringify(value)).toBe(
+        format,
+      );
+    }
+    expect(refusal(() => validateMemoryOccurredAt(1_685_095_200_000)).message).toBe(format);
+    expect(refusal(() => validateMemoryOccurredAt(null, "records[3].occurredAt"))).toMatchObject({
+      field: "records[3].occurredAt",
+    });
+    // The instant, after its offset, must fall in the four-digit UTC years.
+    const range = `occurredAt must fall in the UTC years 0001 through ${MEMORY_OCCURRED_AT_LIMITS.maximumYear}`;
+    for (const value of [
+      "0001-01-01T00:30:00+01:00",
+      "9999-12-31T23:00:00-01:00",
+      "0000-06-01T00:00:00Z",
+    ]) {
+      expect(refusal(() => validateMemoryOccurredAt(value)).message, value).toBe(range);
+    }
   });
 
   test("a search's translations are a few trimmed queries, each bounded as the query is", () => {
@@ -455,6 +510,41 @@ describe("the engine validates before it writes", () => {
         ]),
       ),
     ).toMatchObject({ field: "records[0].title" });
+    expect(statements).toEqual([]);
+  });
+
+  test("writes refuse an occurredAt before any statement", async () => {
+    const primitives = createMemoryMutationPrimitives();
+    const { statements, transaction } = watchedTransaction();
+    const scope = { partitionId: untouchedStorage.partitionId, ownerId: untouchedStorage.ownerId };
+    expect(
+      await asyncRefusal(
+        primitives.insertMemoryInTransaction(transaction, scope, {
+          content: "A fact.",
+          occurredAt: "2023-05-26",
+        }),
+      ),
+    ).toMatchObject({ field: "occurredAt" });
+    expect(
+      await asyncRefusal(
+        primitives.updateMemoryInTransaction(transaction, scope, "id", {
+          occurredAt: "10000-01-01T00:00:00Z",
+        }),
+      ),
+    ).toMatchObject({ field: "occurredAt" });
+    expect(
+      await asyncRefusal(
+        primitives.insertMemoriesInTransaction(transaction, scope, [
+          {
+            id: "40000000-0000-4000-8000-000000000001",
+            scope: "shared",
+            occurredAt: "yesterday",
+            content: "A fact.",
+            metadata: {},
+          },
+        ]),
+      ),
+    ).toMatchObject({ field: "records[0].occurredAt" });
     expect(statements).toEqual([]);
   });
 

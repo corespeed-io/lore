@@ -21,9 +21,11 @@ const THIS_FILE = fileURLToPath(import.meta.url);
 
 /**
  * The shipped Memory path: every record becomes an Alice-private Memory through the
- * Memory module, embeddings come from leased maintenance, and each question is one
- * Memory search with the deployment's default knobs, limited to its Unit. Bob's
- * private tripwires sit in the same Workspace; a search that returns one fails.
+ * Memory module, with its occurredAt when the record states one, embeddings come from
+ * leased maintenance, and each question is one Memory search with the deployment's
+ * default knobs, limited to its Unit. Each passage carries its Memory's occurredAt,
+ * as every search result does. Bob's private tripwires sit in the same Workspace; a
+ * search that returns one fails.
  */
 export function memorySearchSystem(options: {
   store: EvalStore;
@@ -50,8 +52,9 @@ export function memorySearchSystem(options: {
     runEntries: [THIS_FILE],
     ingestIdentity: () => ({
       system: "memory-search",
-      ingestRevision: 1,
-      records: "one Alice-private Memory per record; metadata evalUnit, evalKey, evalAnchorKey",
+      ingestRevision: 2,
+      records:
+        "one Alice-private Memory per record, with its occurredAt; metadata evalUnit, evalKey, evalAnchorKey",
       tripwires: "one Bob-private Memory each, never embedded",
       chunking: MEMORY_CHUNKING_REVISION,
       embedding: EMBEDDING_SPACE,
@@ -80,6 +83,7 @@ export function memorySearchSystem(options: {
               {
                 content: record.text,
                 scope: "private",
+                ...(record.occurredAt ? { occurredAt: record.occurredAt } : {}),
                 metadata: {
                   evalUnit: unit.key,
                   evalKey: record.key,
@@ -123,6 +127,7 @@ export function memorySearchSystem(options: {
           return {
             id: metadata.evalTripwire === undefined ? `memory:${key}` : "tripwire",
             text: result.evidence,
+            ...(result.memory.occurredAt ? { occurredAt: result.memory.occurredAt } : {}),
             sourceKeys: metadata.evalTripwire === undefined ? [key] : [],
           };
         }),

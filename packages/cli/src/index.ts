@@ -39,12 +39,12 @@ Commands:
   memory list [--limit N] [--cursor CURSOR] [--offset N] [--scope shared|private]
   memory search <query> [--translation TEXT]... [--limit N] [--scope shared|private]
   memory search --stdin [--translation TEXT]... [--limit N] [--scope shared|private]
-  memory remember <content> [--scope shared|private] [--title TEXT] [--gloss TEXT] [--metadata JSON] [--idempotency-key KEY]
-  memory remember --stdin [--scope shared|private] [--title TEXT] [--gloss TEXT] [--metadata JSON] [--idempotency-key KEY]
-  memory propose create <content>|--stdin [--scope shared|private] [--title TEXT] [--gloss TEXT] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
-  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--title TEXT|--no-title] [--gloss TEXT|--no-gloss] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
+  memory remember <content> [--scope shared|private] [--title TEXT] [--gloss TEXT] [--occurred-at TIME] [--metadata JSON] [--idempotency-key KEY]
+  memory remember --stdin [--scope shared|private] [--title TEXT] [--gloss TEXT] [--occurred-at TIME] [--metadata JSON] [--idempotency-key KEY]
+  memory propose create <content>|--stdin [--scope shared|private] [--title TEXT] [--gloss TEXT] [--occurred-at TIME] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
+  memory propose update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--title TEXT|--no-title] [--gloss TEXT|--no-gloss] [--occurred-at TIME|--no-occurred-at] [--metadata JSON] [--evidence UUID] [--observation-evidence UUID] [--code-evidence ARTIFACT_UUID:RELATIONSHIP] [--idempotency-key KEY]
   memory get <memory-id>
-  memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--title TEXT|--no-title] [--gloss TEXT|--no-gloss] [--metadata JSON] [--idempotency-key KEY]
+  memory update <memory-id> --version N [--content TEXT|--stdin] [--scope shared|private] [--title TEXT|--no-title] [--gloss TEXT|--no-gloss] [--occurred-at TIME|--no-occurred-at] [--metadata JSON] [--idempotency-key KEY]
   memory forget <memory-id> --version N [--idempotency-key KEY]
   memory link <source-memory-id> <target-memory-id> [--kind KIND] [--weight N] [--metadata JSON]
   memory unlink <source-memory-id> <target-memory-id> [--kind KIND]
@@ -82,6 +82,8 @@ target, and --kind (default: ${LORE_CONTRACT.defaults.memoryLinkKind}), so link 
 existing Link, so an omitted --weight becomes ${LORE_CONTRACT.defaults.memoryLinkWeight} and omitted --metadata becomes {}.
 A repeated unlink reports not_found once the Link is gone. Repeat --translation
 (at most ${LORE_CONTRACT.limits.memorySearchTranslations}) to search the same question in other languages; Lore returns one ranking.
+--occurred-at is when the event a Memory records happened, not when it is written:
+an RFC 3339 date-time with an offset, such as 2023-05-26T10:00:00Z.
 `;
 
 class CliUsageError extends Error {
@@ -311,6 +313,32 @@ function optionLineChange(
   return null;
 }
 
+/** RFC 3339 date-time with an offset; the server checks the calendar and range. */
+const RFC_3339_DATE_TIME = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/;
+
+/**
+ * An `--occurred-at` time, or for an update `--no-occurred-at` to remove it (null):
+ * when the event a Memory records happened, not when it is written.
+ */
+function optionOccurredAt(
+  value: string | undefined,
+  remove: boolean | undefined = false,
+): string | null | undefined {
+  if (remove) {
+    if (value !== undefined) {
+      throw new CliUsageError("--occurred-at and --no-occurred-at cannot be combined");
+    }
+    return null;
+  }
+  if (value === undefined) return undefined;
+  if (!RFC_3339_DATE_TIME.test(value)) {
+    throw new CliUsageError(
+      "--occurred-at must be an RFC 3339 date-time with an offset, such as 2023-05-26T10:00:00Z",
+    );
+  }
+  return value;
+}
+
 function optionMetadata(value: string | undefined): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
   let parsed: unknown;
@@ -365,9 +393,11 @@ export async function runLoreCli(
         "max-characters": { type: "string" },
         metadata: { type: "string" },
         "no-gloss": { type: "boolean" },
+        "no-occurred-at": { type: "boolean" },
         "no-title": { type: "boolean" },
         offset: { type: "string" },
         "observation-evidence": { type: "string", multiple: true },
+        "occurred-at": { type: "string" },
         pretty: { type: "boolean" },
         path: { type: "string" },
         repository: { type: "string" },
@@ -596,6 +626,7 @@ export async function runLoreCli(
         "gloss",
         "idempotency-key",
         "metadata",
+        "occurred-at",
         "scope",
         "stdin",
         "title",
@@ -610,6 +641,7 @@ export async function runLoreCli(
             scope: optionScope(parsed.values.scope),
             title: optionLine(parsed.values.title, "title", MAX_MEMORY_TITLE_CHARACTERS),
             gloss: optionLine(parsed.values.gloss, "gloss", MAX_MEMORY_GLOSS_CHARACTERS),
+            occurredAt: optionOccurredAt(parsed.values["occurred-at"]),
             metadata: optionMetadata(parsed.values.metadata),
           },
           { idempotencyKey: parsed.values["idempotency-key"] },
@@ -638,6 +670,7 @@ export async function runLoreCli(
           "idempotency-key",
           "metadata",
           "observation-evidence",
+          "occurred-at",
           "scope",
           "stdin",
           "title",
@@ -650,6 +683,7 @@ export async function runLoreCli(
           scope: optionScope(parsed.values.scope),
           title: optionLine(parsed.values.title, "title", MAX_MEMORY_TITLE_CHARACTERS),
           gloss: optionLine(parsed.values.gloss, "gloss", MAX_MEMORY_GLOSS_CHARACTERS),
+          occurredAt: optionOccurredAt(parsed.values["occurred-at"]),
           metadata: optionMetadata(parsed.values.metadata),
           evidenceMemoryIds: optionEvidence(parsed.values.evidence),
           evidenceObservationIds: optionEvidence(
@@ -667,8 +701,10 @@ export async function runLoreCli(
           "idempotency-key",
           "metadata",
           "no-gloss",
+          "no-occurred-at",
           "no-title",
           "observation-evidence",
+          "occurred-at",
           "scope",
           "stdin",
           "title",
@@ -708,8 +744,12 @@ export async function runLoreCli(
           "gloss",
           MAX_MEMORY_GLOSS_CHARACTERS,
         );
+        const occurredAt = optionOccurredAt(
+          parsed.values["occurred-at"],
+          parsed.values["no-occurred-at"],
+        );
         const proposalMetadata = optionMetadata(parsed.values.metadata);
-        const rest = { title, gloss, metadata: proposalMetadata };
+        const rest = { title, gloss, occurredAt, metadata: proposalMetadata };
         if (content !== undefined) {
           proposal = { ...updateBase, ...rest, content, scope };
         } else if (scope !== undefined) {
@@ -718,11 +758,13 @@ export async function runLoreCli(
           proposal = { ...updateBase, ...rest, title };
         } else if (gloss !== undefined) {
           proposal = { ...updateBase, ...rest, gloss };
+        } else if (occurredAt !== undefined) {
+          proposal = { ...updateBase, ...rest, occurredAt };
         } else if (proposalMetadata !== undefined) {
           proposal = { ...updateBase, metadata: proposalMetadata };
         } else {
           throw new CliUsageError(
-            "memory propose update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, or --metadata",
+            "memory propose update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, --occurred-at, --no-occurred-at, or --metadata",
           );
         }
       } else {
@@ -767,7 +809,9 @@ export async function runLoreCli(
         "idempotency-key",
         "metadata",
         "no-gloss",
+        "no-occurred-at",
         "no-title",
+        "occurred-at",
         "scope",
         "stdin",
         "title",
@@ -795,11 +839,12 @@ export async function runLoreCli(
           "gloss",
           MAX_MEMORY_GLOSS_CHARACTERS,
         ),
+        occurredAt: optionOccurredAt(parsed.values["occurred-at"], parsed.values["no-occurred-at"]),
         metadata: optionMetadata(parsed.values.metadata),
       };
       if (Object.values(update).every((value) => value === undefined)) {
         throw new CliUsageError(
-          "memory update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, or --metadata",
+          "memory update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, --occurred-at, --no-occurred-at, or --metadata",
         );
       }
       const expectedVersion = optionInteger(parsed.values.version, "--version");

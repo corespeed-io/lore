@@ -129,6 +129,80 @@ test("CLI sends a title and gloss on remember, and sets or removes them on updat
   }
 });
 
+test("CLI sends --occurred-at on remember and proposals, and sets or removes it on update", async () => {
+  const memoryId = "20000000-0000-4000-8000-000000000001";
+  const environment = {
+    LORE_URL: "https://lore.example.test",
+    LORE_WORKSPACE_ID: WORKSPACE_ID,
+    LORE_AGENT_TOKEN: AGENT_TOKEN,
+  };
+  const body = async (args: string[]) => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ id: memoryId, version: 2 }));
+    const captured = captureIo();
+    expect(await runLoreCli(args, { environment, fetch: fetchMock, io: captured.io })).toBe(0);
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    return JSON.parse(String(init.body)) as unknown;
+  };
+  await expect(
+    body(["memory", "remember", "The launch moved.", "--occurred-at", "2023-05-26T18:00:00+08:00"]),
+  ).resolves.toEqual({ content: "The launch moved.", occurredAt: "2023-05-26T18:00:00+08:00" });
+  await expect(
+    body(["memory", "update", memoryId, "--version", "1", "--occurred-at", "2023-05-27T09:00:00Z"]),
+  ).resolves.toEqual({ occurredAt: "2023-05-27T09:00:00Z" });
+  await expect(
+    body(["memory", "update", memoryId, "--version", "1", "--no-occurred-at"]),
+  ).resolves.toEqual({ occurredAt: null });
+  await expect(
+    body([
+      "memory",
+      "propose",
+      "create",
+      "The review happened.",
+      "--occurred-at",
+      "2026-08-31T15:00:00Z",
+    ]),
+  ).resolves.toMatchObject({ kind: "create", occurredAt: "2026-08-31T15:00:00Z" });
+  await expect(
+    body(["memory", "propose", "update", memoryId, "--version", "1", "--no-occurred-at"]),
+  ).resolves.toEqual({
+    kind: "update",
+    targetMemoryId: memoryId,
+    expectedVersion: 1,
+    occurredAt: null,
+  });
+
+  for (const [args, message] of [
+    [
+      ["memory", "remember", "Keep this", "--occurred-at", "2023-05-26"],
+      "--occurred-at must be an RFC 3339 date-time with an offset",
+    ],
+    [
+      ["memory", "remember", "Keep this", "--occurred-at", "yesterday"],
+      "--occurred-at must be an RFC 3339 date-time with an offset",
+    ],
+    [
+      [
+        "memory",
+        "update",
+        memoryId,
+        "--version",
+        "1",
+        "--occurred-at",
+        "2023-05-26T10:00:00Z",
+        "--no-occurred-at",
+      ],
+      "--occurred-at and --no-occurred-at cannot be combined",
+    ],
+    [["memory", "remember", "Keep this", "--no-occurred-at"], "--no-occurred-at"],
+  ] as const) {
+    const refused = captureIo();
+    const fetchMock = vi.fn();
+    expect(await runLoreCli([...args], { environment, fetch: fetchMock, io: refused.io })).toBe(2);
+    expect(refused.stderr.join("")).toContain(message);
+    expect(fetchMock).not.toHaveBeenCalled();
+  }
+});
+
 test("CLI queries bounded exact-revision Code Dependencies without accepting a local path", async () => {
   const captured = captureIo();
   const commitOid = "a".repeat(40);
@@ -365,7 +439,7 @@ test("CLI submits versioned update proposals and rejects an empty patch", async 
   );
   expect(invalidExitCode).toBe(2);
   expect(invalid.stderr.join("")).toContain(
-    "memory propose update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, or --metadata",
+    "memory propose update requires --content, --scope, --title, --no-title, --gloss, --no-gloss, --occurred-at, --no-occurred-at, or --metadata",
   );
 });
 

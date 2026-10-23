@@ -202,6 +202,18 @@ const memoryGlossSchema = z
 /** Tool-description guidance for writing a Memory in another language. */
 const GLOSS_HINT =
   "When the content is not in English, also send gloss: one line of English with its meaning and key terms, so English keyword search finds it.";
+/** When a Memory's event happened, as clients send it; the server holds it to its rule. */
+const memoryOccurredAtSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$/, {
+    message: "occurredAt must be an RFC 3339 date-time with an offset",
+  })
+  .describe(
+    "When the event or statement this Memory records happened: an RFC 3339 date-time with an offset, such as 2023-05-26T10:00:00Z. Not when you write it.",
+  );
+/** Tool-description guidance for dating a Memory. */
+const OCCURRED_AT_HINT =
+  "When the content records an event, a change, or something said at a known time, also send occurredAt: when it happened (RFC 3339 with an offset), not when you write it. Readers use it to order events and to tell which of two conflicting Memories is newer.";
 /** Bounds the server holds a search's translations to. */
 const translationsSchema = z
   .array(z.string().trim().min(1).max(LIMITS.memorySearchQueryLength))
@@ -227,6 +239,7 @@ const memoryIdentitySchema = z.object({
     .max(LIMITS.memoryGlossCharacters * 2)
     .nullable(),
   glossTruncated: z.boolean(),
+  occurredAt: z.string().nullable(),
   version: z.number().int().positive(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -384,6 +397,7 @@ function mcpMemorySummary(
     titleTruncated: title.truncated,
     gloss: gloss.value,
     glossTruncated: gloss.truncated,
+    occurredAt: memory.occurredAt,
     ...boundedMetadata(memory.metadata, metadataBudget),
     version: memory.version,
     createdAt: memory.createdAt,
@@ -581,7 +595,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_search",
     {
       title: "Search Lore Memories",
-      description: `Search only Memories visible to the configured Lore Actor and Workspace using Lore's authorized retrieval pipeline. Results return bounded evidence and Memory metadata. When the Memories found do not answer the question or lack a detail, call lore_read_evidence with their ids to read the original Observations they came from. Use lore_search_evidence to search all original recorded Observations, including later corrections. ${TRANSLATIONS_HINT}`,
+      description: `Search only Memories visible to the configured Lore Actor and Workspace using Lore's authorized retrieval pipeline. Results return bounded evidence and Memory metadata. When the Memories found do not answer the question or lack a detail, call lore_read_evidence with their ids to read the original Observations they came from. Use lore_search_evidence to search all original recorded Observations, including later corrections. A Memory's occurredAt, when present, is when its event happened, as its writer stated it; createdAt and updatedAt are only when Lore recorded and last changed it. ${TRANSLATIONS_HINT}`,
       inputSchema: z.object({
         query: z.string().trim().min(1).max(LIMITS.memorySearchQueryLength),
         translations: translationsSchema.optional(),
@@ -755,12 +769,13 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_remember",
     {
       title: "Remember in Lore",
-      description: `Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. ${GLOSS_HINT} When the Memory comes from recorded Observations, cite them afterwards with lore_cite_evidence so later readers can check the original. ${IDEMPOTENCY_HINT}`,
+      description: `Create a Memory in the configured Workspace. Shared is the default; request private scope explicitly. ${GLOSS_HINT} ${OCCURRED_AT_HINT} When the Memory comes from recorded Observations, cite them afterwards with lore_cite_evidence so later readers can check the original. ${IDEMPOTENCY_HINT}`,
       inputSchema: z.object({
         content: memoryContentSchema,
         scope: scopeSchema.default("shared"),
         title: memoryTitleSchema.optional(),
         gloss: memoryGlossSchema.optional(),
+        occurredAt: memoryOccurredAtSchema.optional(),
         metadata: metadataSchema.optional(),
         idempotencyKey: idempotencyKeySchema,
       }),
@@ -856,7 +871,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_propose",
     {
       title: "Propose a Lore Memory",
-      description: `Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. ${GLOSS_HINT} ${IDEMPOTENCY_HINT}`,
+      description: `Submit an owner-private create or version-bound update proposal for human review. This does not create or change searchable Memory until the owner accepts it. ${GLOSS_HINT} ${OCCURRED_AT_HINT} ${IDEMPOTENCY_HINT}`,
       inputSchema: z.discriminatedUnion("kind", [
         z
           .object({
@@ -865,6 +880,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             scope: scopeSchema.default("shared"),
             title: memoryTitleSchema.optional(),
             gloss: memoryGlossSchema.optional(),
+            occurredAt: memoryOccurredAtSchema.optional(),
             metadata: metadataSchema.optional(),
             evidenceMemoryIds: z.array(z.string().uuid()).max(MAX_PROPOSAL_EVIDENCE).optional(),
             evidenceObservationIds: z
@@ -899,6 +915,10 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
               .nullable()
               .optional()
               .describe("A new English gloss, or null to remove it."),
+            occurredAt: memoryOccurredAtSchema
+              .nullable()
+              .optional()
+              .describe("A new time the event happened, or null to remove it."),
             metadata: metadataSchema.optional(),
             evidenceMemoryIds: z.array(z.string().uuid()).max(MAX_PROPOSAL_EVIDENCE).optional(),
             evidenceObservationIds: z
@@ -917,8 +937,9 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
               input.scope !== undefined ||
               input.title !== undefined ||
               input.gloss !== undefined ||
+              input.occurredAt !== undefined ||
               input.metadata !== undefined,
-            { message: "content, scope, title, gloss, or metadata is required" },
+            { message: "content, scope, title, gloss, occurredAt, or metadata is required" },
           )
           .refine(
             (input) =>
@@ -945,10 +966,12 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
           normalizedProposal = { ...proposalInput, title: proposalInput.title };
         } else if (proposalInput.gloss !== undefined) {
           normalizedProposal = { ...proposalInput, gloss: proposalInput.gloss };
+        } else if (proposalInput.occurredAt !== undefined) {
+          normalizedProposal = { ...proposalInput, occurredAt: proposalInput.occurredAt };
         } else if (proposalInput.metadata !== undefined) {
           normalizedProposal = { ...proposalInput, metadata: proposalInput.metadata };
         } else {
-          throw new TypeError("content, scope, title, gloss, or metadata is required");
+          throw new TypeError("content, scope, title, gloss, occurredAt, or metadata is required");
         }
         return success({
           proposal: proposalSubmission(
@@ -965,7 +988,7 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
     "lore_update",
     {
       title: "Update a Lore Memory",
-      description: `Replace fields on one owned Memory using its current version. This may overwrite content, title, gloss, metadata, or visibility. ${GLOSS_HINT} ${IDEMPOTENCY_HINT}`,
+      description: `Replace fields on one owned Memory using its current version. This may overwrite content, title, gloss, occurredAt, metadata, or visibility. ${GLOSS_HINT} ${OCCURRED_AT_HINT} ${IDEMPOTENCY_HINT}`,
       inputSchema: z
         .object({
           memoryId: z.string().uuid(),
@@ -980,6 +1003,10 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             .nullable()
             .optional()
             .describe("A new English gloss, or null to remove it."),
+          occurredAt: memoryOccurredAtSchema
+            .nullable()
+            .optional()
+            .describe("A new time the event happened, or null to remove it."),
           metadata: metadataSchema.optional(),
           idempotencyKey: idempotencyKeySchema,
         })
@@ -989,19 +1016,30 @@ function registerTools(server: McpServer, memories: LoreMcpMemoryClient): void {
             input.scope !== undefined ||
             input.title !== undefined ||
             input.gloss !== undefined ||
+            input.occurredAt !== undefined ||
             input.metadata !== undefined,
-          { message: "content, scope, title, gloss, or metadata is required" },
+          { message: "content, scope, title, gloss, occurredAt, or metadata is required" },
         ),
       outputSchema: z.object({ memory: memorySchema }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
-    async ({ memoryId, version, content, scope, title, gloss, metadata, idempotencyKey }) => {
+    async ({
+      memoryId,
+      version,
+      content,
+      scope,
+      title,
+      gloss,
+      occurredAt,
+      metadata,
+      idempotencyKey,
+    }) => {
       try {
         return success({
           memory: mcpMemory(
             await memories.updateMemory(
               memoryId,
-              { content, scope, title, gloss, metadata },
+              { content, scope, title, gloss, occurredAt, metadata },
               versionedMutationOptions(version, idempotencyKey),
             ),
             DETAIL_CONTENT_BUDGET,
@@ -1699,6 +1737,7 @@ function registerContextTools(server: McpServer, context: LoreMcpContextClient):
               .string()
               .max(LIMITS.memoryGlossCharacters * 2)
               .nullable(),
+            occurredAt: z.string().nullable(),
             updatedAt: z.string(),
             score: z.number(),
             rerankScore: z.number().min(0).max(1).optional(),

@@ -17,6 +17,7 @@ function memory(id: string): Memory {
     scope: "shared",
     title: null,
     gloss: null,
+    occurredAt: null,
     content: `Memory ${id}`,
     metadata: {},
     version: 1,

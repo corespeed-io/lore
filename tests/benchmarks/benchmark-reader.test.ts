@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
+import { locomoSessionTime } from "../../tools/evaluation/harness/datasets";
 import {
   createBenchmarkReaderFromEnvironment,
   LONGMEMEVAL_V2_READER_PROMPT_SHA256,
@@ -21,6 +22,29 @@ test("fixed-reader prompt preserves rank while enforcing a hard context budget",
   expect(prompt).toContain('<evidence rank="1" id="first">');
   expect(prompt.indexOf('id="first"')).toBeLessThan(prompt.indexOf('id="second"'));
   expect(prompt.length).toBeLessThanOrEqual(1_000);
+});
+
+test("evidence whose Memory states when it happened shows that time on its tag", () => {
+  const prompt = renderBenchmarkReaderInput(
+    "How many stars do I need?",
+    [
+      { id: "older", text: "I need 125 stars.", occurredAt: "2023-07-11T09:00:00.000000Z" },
+      { id: "undated", text: "Gold is the top level." },
+    ],
+    1_000,
+  );
+  expect(prompt).toContain(
+    '<evidence rank="1" id="older" occurred-at="2023-07-11T09:00:00.000000Z">\nI need 125 stars.',
+  );
+  // Evidence without a time renders exactly as before.
+  expect(prompt).toContain('<evidence rank="2" id="undated">\nGold is the top level.');
+});
+
+test("LoCoMo session times read as the conversation's own clock", () => {
+  expect(locomoSessionTime("1:56 pm on 8 May, 2023")).toBe("2023-05-08T13:56:00.000Z");
+  expect(locomoSessionTime("12:05 am on 1 January, 2024")).toBe("2024-01-01T00:05:00.000Z");
+  expect(locomoSessionTime("12:30 pm on 31 December, 2023")).toBe("2023-12-31T12:30:00.000Z");
+  expect(() => locomoSessionTime("8 May 2023")).toThrow("Unexpected LoCoMo session time");
 });
 
 test("LongMemEval-V2 reader protocol keeps memory before the question and domain guidance", () => {

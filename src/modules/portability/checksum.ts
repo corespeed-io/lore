@@ -9,9 +9,10 @@ import type { WorkspaceArchiveFormat } from "./limits";
  * The formats differ in how object keys sort:
  * - `lore-workspace-v1` sorts them with the default-locale `localeCompare`, as the
  *   first archives were written. A runtime's collation decides that order.
- * - `lore-workspace-v2` and `lore-workspace-v3` sort them by UTF-16 code unit, the
- *   same in every runtime. v3 differs from v2 in its payload (Memory titles and
- *   glosses), not in its serialization.
+ * - `lore-workspace-v2`, `lore-workspace-v3`, and `lore-workspace-v4` sort them by
+ *   UTF-16 code unit, the same in every runtime. v3 differs from v2 in its payload
+ *   (Memory titles and glosses), and v4 from v3 in its payload (Memory occurredAt),
+ *   not in their serialization.
  */
 const byCodeUnit = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -20,6 +21,7 @@ const KEY_ORDER: Readonly<Record<WorkspaceArchiveFormat, (left: string, right: s
     "lore-workspace-v1": (left, right) => left.localeCompare(right),
     "lore-workspace-v2": byCodeUnit,
     "lore-workspace-v3": byCodeUnit,
+    "lore-workspace-v4": byCodeUnit,
   };
 
 function archiveCanonicalJson(

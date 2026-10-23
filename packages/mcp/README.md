@@ -19,6 +19,11 @@ replacing an existing Link's weight and metadata, and `lore_unlink` deletes one.
 are marked destructive, and they are separate tools so a host can allow one and gate
 the other. Read-only `lore_links` lists up to 50 of one Memory's Links per call,
 outbound or inbound, with each Link's metadata bounded to 1,000 characters.
+Every Memory it returns carries `occurredAt`: when the event or statement the Memory
+records happened, as its writer stated it, or null. `lore_remember`, `lore_update`,
+and `lore_propose` ask the agent to send one (RFC 3339 with an offset) whenever the
+content records an event, a change, or something said at a known time; it is not
+`createdAt`, which is only when Lore stored the Memory.
 It delegates all access control to Lore/Postgres RLS and stores no Memory or
 authorization state.
 

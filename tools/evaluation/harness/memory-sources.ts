@@ -102,10 +102,10 @@ export function memorySourcesSystem(options: {
     runEntries: [THIS_FILE, options.layout.entry],
     ingestIdentity: () => ({
       system: "memory-sources",
-      ingestRevision: 1,
+      ingestRevision: 2,
       sources: "one Alice-private conversation Episode per 100 sources; one document_fragment each",
       records:
-        "one Alice-private Memory per record, citing its sources; metadata evalUnit, evalKey, evalAnchorKey",
+        "one Alice-private Memory per record, with its occurredAt, citing its sources; metadata evalUnit, evalKey, evalAnchorKey",
       tripwires: "one Bob-private Memory each, never embedded, citing a Bob-private Observation",
       chunking: MEMORY_CHUNKING_REVISION,
       embedding: EMBEDDING_SPACE,
@@ -167,6 +167,7 @@ export function memorySourcesSystem(options: {
             const memory = await alice.remember(actor, {
               content: record.text,
               scope: "private",
+              ...(record.occurredAt ? { occurredAt: record.occurredAt } : {}),
               metadata: {
                 evalUnit: unit.key,
                 evalKey: record.key,
@@ -252,7 +253,12 @@ export function memorySourcesSystem(options: {
         const metadata = result.memory.metadata as Record<string, unknown>;
         const key = String(metadata.evalAnchorKey ?? metadata.evalKey ?? "");
         return metadata.evalTripwire === undefined
-          ? { id: `memory:${key}`, text: result.evidence, sourceKeys: [key] }
+          ? {
+              id: `memory:${key}`,
+              text: result.evidence,
+              ...(result.memory.occurredAt ? { occurredAt: result.memory.occurredAt } : {}),
+              sourceKeys: [key],
+            }
           : { id: "tripwire", text: result.evidence, sourceKeys: [] };
       });
       const byObservation = await keys;

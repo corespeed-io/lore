@@ -99,6 +99,8 @@ function longMemEvalSource() {
               key: memory.key,
               text: memory.content,
               ...(memory.anchorKey ? { anchorKey: memory.anchorKey } : {}),
+              // The session's own clock, as the writing agent would state it.
+              occurredAt: longMemEvalSessionTime(String(memory.metadata?.sessionDate)),
             }),
           ),
         cases: [evalCase],
@@ -211,6 +213,32 @@ export function longMemEvalSessionTime(value: string): string {
   return `${year}-${month}-${day}T${hour}:${minute}:00.000Z`;
 }
 
+const LOCOMO_MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** "1:56 pm on 8 May, 2023" as RFC 3339 UTC, the conversation's own clock. */
+export function locomoSessionTime(value: string): string {
+  const match = /^(\d{1,2}):(\d{2}) (am|pm) on (\d{1,2}) ([A-Z][a-z]+), (\d{4})$/.exec(value);
+  const month = match ? LOCOMO_MONTHS.indexOf(match[5] ?? "") : -1;
+  if (!match || month < 0) throw new Error(`Unexpected LoCoMo session time ${value}`);
+  const [, hour, minute, half, day, , year] = match;
+  const hours = (Number(hour) % 12) + (half === "pm" ? 12 : 0);
+  const pad = (number: number) => String(number).padStart(2, "0");
+  return `${year}-${pad(month + 1)}-${pad(Number(day))}T${pad(hours)}:${minute}:00.000Z`;
+}
+
 /**
  * LongMemEval-S as fact Memories with their sources: one Unit per question, one
  * record per extracted fact, each citing the whole session it came from, and each
@@ -285,13 +313,17 @@ export function longMemEvalSFacts(): Dataset {
             `${unit.key}: ${unitFacts.length} facts do not match ${sessionOf.size} session Memories`,
           );
         }
+        // A fact happened when the session Memory it came from did.
+        const occurredAt = new Map(unit.records.map((memory) => [memory.key, memory.occurredAt]));
         const records: CorpusRecord[] = unitFacts.map((fact) => {
           const session = sessionOf.get(fact.key);
           if (!session) throw new Error(`${unit.key}: fact ${fact.key} names no session`);
+          const time = occurredAt.get(fact.key);
           return {
             key: fact.key,
             text: fact.text,
             ...(session === fact.key ? {} : { anchorKey: session }),
+            ...(time ? { occurredAt: time } : {}),
             cites: [session],
           };
         });
@@ -349,6 +381,7 @@ export function locomo(): Dataset {
             session.dialogs.map((dialog) => ({
               key: dialog.id,
               text: renderLocomoDialog(session, dialog),
+              occurredAt: locomoSessionTime(session.dateTime),
             })),
           ),
           cases: questions.map((question) => ({

@@ -80,6 +80,22 @@ function displayDate(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : DATE_FORMAT.format(date);
 }
 
+const DATE_TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+  timeZoneName: "short",
+});
+
+/** When a Memory's event happened, to the minute, in UTC. */
+function displayDateTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : DATE_TIME_FORMAT.format(date);
+}
+
 function RelatedMemories({
   memories,
   count,
@@ -222,6 +238,7 @@ export function MemoryView({
     scope,
     ownerUserId,
     createdByAgentId,
+    occurredAt,
     createdAt,
     updatedAt,
     version,
@@ -355,6 +372,12 @@ export function MemoryView({
                 <dt>Created by</dt>
                 <dd>{createdByAgentId ?? "User"}</dd>
               </div>
+              {occurredAt !== null && (
+                <div className="property-row">
+                  <dt>Happened</dt>
+                  <dd>{displayDateTime(occurredAt)}</dd>
+                </div>
+              )}
               <div className="property-row">
                 <dt>Created</dt>
                 <dd>{displayDate(createdAt)}</dd>

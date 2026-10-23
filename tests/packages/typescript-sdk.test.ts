@@ -72,6 +72,7 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     scope: "shared",
     title: null,
     gloss: null,
+    occurredAt: null,
     content: "Lore remembers safely.",
     metadata: {},
     version: 3,

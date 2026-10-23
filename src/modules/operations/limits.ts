@@ -88,6 +88,7 @@ export const DEPLOYMENT_FEATURES = {
   memoryLinks: true,
   memoryTitles: true,
   memoryGlosses: true,
+  memoryOccurredAt: true,
 } as const;
 
 export const MEMORY_CHUNKING_CAPABILITY = {

@@ -4,6 +4,7 @@ import {
   jsonResponse,
   linkMetadataSchema,
   memoryGlossSchema,
+  memoryOccurredAtSchema,
   memoryScopeSchema,
   memoryTitleSchema,
   metadataSchema,
@@ -69,12 +70,17 @@ export const portabilitySchemas = {
       title: {
         ...memoryTitleSchema,
         description:
-          "Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a title.",
+          "Required, null for none, in lore-workspace-v3 and lore-workspace-v4; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a title.",
       },
       gloss: {
         ...memoryGlossSchema,
         description:
-          "Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a gloss.",
+          "Required, null for none, in lore-workspace-v3 and lore-workspace-v4; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a gloss.",
+      },
+      occurredAt: {
+        ...memoryOccurredAtSchema,
+        description:
+          "When the Memory's event happened. Required, null for none, in lore-workspace-v4; absent from earlier formats, which cannot carry it.",
       },
       content: {
         type: "string",

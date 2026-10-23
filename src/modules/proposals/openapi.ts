@@ -9,6 +9,7 @@ import {
   idempotencyHeader,
   jsonResponse,
   memoryGlossSchema,
+  memoryOccurredAtSchema,
   memoryScopeSchema,
   memoryTitleSchema,
   metadataSchema,
@@ -44,6 +45,7 @@ const memoryProposalUpdateProperties = {
   scope: memoryScopeSchema,
   title: memoryTitleSchema,
   gloss: memoryGlossSchema,
+  occurredAt: memoryOccurredAtSchema,
   metadata: metadataSchema,
   evidenceMemoryIds: {
     type: "array",
@@ -60,7 +62,9 @@ const memoryProposalUpdateProperties = {
   codeEvidence: proposalCodeEvidenceProperty,
 } as const;
 
-function memoryProposalUpdateVariant(change: "content" | "gloss" | "metadata" | "scope" | "title") {
+function memoryProposalUpdateVariant(
+  change: "content" | "gloss" | "metadata" | "occurredAt" | "scope" | "title",
+) {
   return {
     type: "object",
     additionalProperties: false,
@@ -169,6 +173,7 @@ export const proposalsSchemas = {
       scope: { ...memoryScopeSchema, default: "shared" },
       title: memoryTitleSchema,
       gloss: memoryGlossSchema,
+      occurredAt: memoryOccurredAtSchema,
       metadata: metadataSchema,
       evidenceMemoryIds: {
         type: "array",
@@ -191,6 +196,7 @@ export const proposalsSchemas = {
       { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
       { $ref: "#/components/schemas/MemoryProposalUpdateTitleInput" },
       { $ref: "#/components/schemas/MemoryProposalUpdateGlossInput" },
+      { $ref: "#/components/schemas/MemoryProposalUpdateOccurredAtInput" },
       { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
     ],
   },
@@ -198,6 +204,7 @@ export const proposalsSchemas = {
   MemoryProposalUpdateScopeInput: memoryProposalUpdateVariant("scope"),
   MemoryProposalUpdateTitleInput: memoryProposalUpdateVariant("title"),
   MemoryProposalUpdateGlossInput: memoryProposalUpdateVariant("gloss"),
+  MemoryProposalUpdateOccurredAtInput: memoryProposalUpdateVariant("occurredAt"),
   MemoryProposalUpdateMetadataInput: memoryProposalUpdateVariant("metadata"),
   ProposeMemoryCodeEvidenceInput: {
     type: "object",
@@ -300,6 +307,11 @@ export const proposalsSchemas = {
         ...memoryGlossSchema,
         description:
           "The gloss a create gives its Memory (null for none), or the gloss an update sets (null removes it). Absent from an update that keeps the target's gloss.",
+      },
+      proposedOccurredAt: {
+        ...memoryOccurredAtSchema,
+        description:
+          "When the Memory's event happened, as a create gives it (null for none) or an update sets it (null removes it). Absent from an update that keeps the target's.",
       },
       proposedMetadata: { type: "object", additionalProperties: true },
       evidenceMemoryIds: {

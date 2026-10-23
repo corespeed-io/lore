@@ -15,6 +15,8 @@ interface SaveMemoryInput {
   title: string | null;
   /** An English gloss, null for none; on an edit, null removes it. */
   gloss: string | null;
+  /** When the event happened (RFC 3339); null removes it, undefined keeps it. */
+  occurredAt?: string | null;
   version?: number;
 }
 
@@ -31,7 +33,13 @@ export function useLoreMutations(workspaceId: string) {
         ? updateMemory(
             workspaceId,
             arg.id,
-            { content: arg.content, scope: arg.scope, title: arg.title, gloss: arg.gloss },
+            {
+              content: arg.content,
+              scope: arg.scope,
+              title: arg.title,
+              gloss: arg.gloss,
+              ...(arg.occurredAt === undefined ? {} : { occurredAt: arg.occurredAt }),
+            },
             arg.version ?? 1,
           )
         : rememberMemory(workspaceId, {
@@ -39,6 +47,7 @@ export function useLoreMutations(workspaceId: string) {
             scope: arg.scope,
             ...(arg.title === null ? {} : { title: arg.title }),
             ...(arg.gloss === null ? {} : { gloss: arg.gloss }),
+            ...(arg.occurredAt == null ? {} : { occurredAt: arg.occurredAt }),
           }),
   );
   const forgetMemoryMutation = useSWRMutation(

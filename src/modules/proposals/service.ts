@@ -13,6 +13,7 @@ import {
   prepareMemoryContent,
   serializedTimestamp,
   validateOptionalMemoryGloss,
+  validateOptionalMemoryOccurredAt,
   validateOptionalMemoryTitle,
 } from "@corespeed/lore-core";
 import {
@@ -135,6 +136,11 @@ export interface MemoryProposal {
   proposedTitle?: string | null;
   /** The gloss a create gives or an update sets, as `proposedTitle` is the title. */
   proposedGloss?: string | null;
+  /**
+   * When the Memory's event happened (RFC 3339 UTC), as a create gives it or an update
+   * sets it, as `proposedTitle` is the title.
+   */
+  proposedOccurredAt?: string | null;
   proposedMetadata: Record<string, unknown>;
   evidenceMemoryIds: string[];
   evidenceObservationIds: string[];
@@ -158,6 +164,7 @@ export interface ProposeMemoryCreate extends ProposedMemoryBase {
   scope?: MemoryScope;
   title?: string | null;
   gloss?: string | null;
+  occurredAt?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -199,11 +206,13 @@ interface MemoryProposalRow {
   proposed_metadata: Record<string, unknown>;
   proposed_title: string | null;
   proposed_gloss: string | null;
+  proposed_occurred_at: Date | string | null;
   changes_content: boolean;
   changes_scope: boolean;
   changes_metadata: boolean;
   changes_title: boolean;
   changes_gloss: boolean;
+  changes_occurred_at: boolean;
   status: MemoryProposalStatus;
   reviewed_by_user_id: string | null;
   accepted_memory_id: string | null;
@@ -238,6 +247,11 @@ interface MemoryProposalCodeEvidenceRow {
   cited_content_sha256: string;
 }
 
+/** A stored proposed time as the RFC 3339 UTC text the engine writes and returns. */
+function proposedOccurredAt(row: MemoryProposalRow): string | null {
+  return row.proposed_occurred_at === null ? null : serializedTimestamp(row.proposed_occurred_at);
+}
+
 function toMemoryProposal(
   row: MemoryProposalRow,
   evidenceMemoryIds: readonly string[] = [],
@@ -259,6 +273,10 @@ function toMemoryProposal(
     // false: a create then proposed neither, and an update keeps the target's.
     ...(row.kind === "create" || row.changes_title ? { proposedTitle: row.proposed_title } : {}),
     ...(row.kind === "create" || row.changes_gloss ? { proposedGloss: row.proposed_gloss } : {}),
+    // One stored before schema revision 18 has changes_occurred_at false, likewise.
+    ...(row.kind === "create" || row.changes_occurred_at
+      ? { proposedOccurredAt: proposedOccurredAt(row) }
+      : {}),
     proposedMetadata: row.proposed_metadata,
     evidenceMemoryIds: [...evidenceMemoryIds],
     evidenceObservationIds: [...evidenceObservationIds],
@@ -400,15 +418,21 @@ export function createMemoryProposalsModule(
         input.scope === undefined &&
         input.title === undefined &&
         input.gloss === undefined &&
+        input.occurredAt === undefined &&
         input.metadata === undefined
       ) {
         throw new MemoryProposalValidationError(
           "proposal",
-          "An update proposal must change content, scope, title, gloss, or metadata",
+          "An update proposal must change content, scope, title, gloss, occurredAt, or metadata",
         );
       }
       if (input.title !== undefined) validateOptionalMemoryTitle(input.title);
       if (input.gloss !== undefined) validateOptionalMemoryGloss(input.gloss);
+      // Stored as the engine stores it: the UTC instant, or null for none.
+      const occurredAt =
+        input.occurredAt === undefined
+          ? undefined
+          : validateOptionalMemoryOccurredAt(input.occurredAt);
 
       try {
         return await database.transaction(async (transaction) => {
@@ -436,11 +460,13 @@ export function createMemoryProposalsModule(
           let proposedMetadata: Record<string, unknown>;
           let proposedTitle: string | null;
           let proposedGloss: string | null;
+          let proposedOccurredAtValue: string | null;
           let changesContent: boolean;
           let changesScope: boolean;
           let changesMetadata: boolean;
           let changesTitle: boolean;
           let changesGloss: boolean;
+          let changesOccurredAt: boolean;
 
           if (input.kind === "create") {
             kind = "create";
@@ -451,11 +477,13 @@ export function createMemoryProposalsModule(
             proposedMetadata = input.metadata ?? {};
             proposedTitle = input.title ?? null;
             proposedGloss = input.gloss ?? null;
+            proposedOccurredAtValue = occurredAt ?? null;
             changesContent = true;
             changesScope = true;
             changesMetadata = true;
             changesTitle = true;
             changesGloss = true;
+            changesOccurredAt = true;
           } else {
             // Hold the target until this Proposal commits. A forget already under way
             // makes this wait and then find no row; a later one waits for this commit,
@@ -489,14 +517,17 @@ export function createMemoryProposalsModule(
             proposedContent = input.content ?? current.content;
             proposedScope = input.scope ?? current.scope;
             proposedMetadata = input.metadata ?? current.metadata;
-            // Only a change is stored: an update that keeps a title or gloss leaves it NULL.
+            // Only a change is stored: an update that keeps a title, gloss, or occurredAt
+            // leaves it NULL.
             proposedTitle = input.title ?? null;
             proposedGloss = input.gloss ?? null;
+            proposedOccurredAtValue = occurredAt ?? null;
             changesContent = input.content !== undefined;
             changesScope = input.scope !== undefined;
             changesMetadata = input.metadata !== undefined;
             changesTitle = input.title !== undefined;
             changesGloss = input.gloss !== undefined;
+            changesOccurredAt = occurredAt !== undefined;
           }
 
           if (changesContent) prepareMemoryContent(proposedContent);
@@ -537,7 +568,7 @@ export function createMemoryProposalsModule(
             `SELECT *
              FROM lore.submit_memory_proposal(
                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb,
-               $11, $12, $13, $14, $15, $16, $17
+               $11, $12, $13, $14, $15, $16, $17, $18::timestamptz, $19
              )`,
             [
               actor.workspaceId,
@@ -557,6 +588,8 @@ export function createMemoryProposalsModule(
               changesTitle,
               proposedGloss,
               changesGloss,
+              proposedOccurredAtValue,
+              changesOccurredAt,
             ],
           );
           const id = inserted.rows[0].id;
@@ -804,6 +837,7 @@ export function createMemoryProposalsModule(
                   scope: current.proposed_scope,
                   title: current.proposed_title,
                   gloss: current.proposed_gloss,
+                  occurredAt: proposedOccurredAt(current),
                   metadata: current.proposed_metadata,
                 },
                 null,
@@ -822,6 +856,7 @@ export function createMemoryProposalsModule(
                 ...(current.changes_scope ? { scope: current.proposed_scope } : {}),
                 ...(current.changes_title ? { title: current.proposed_title } : {}),
                 ...(current.changes_gloss ? { gloss: current.proposed_gloss } : {}),
+                ...(current.changes_occurred_at ? { occurredAt: proposedOccurredAt(current) } : {}),
                 ...(current.changes_metadata ? { metadata: current.proposed_metadata } : {}),
               },
               current.base_memory_version,

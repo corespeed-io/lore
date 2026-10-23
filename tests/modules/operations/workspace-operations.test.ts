@@ -63,15 +63,20 @@ test("Workspace archive selection rejects malformed files before network import"
 });
 
 test("Workspace archive selection accepts every published format and refuses any other", () => {
-  for (const format of ["lore-workspace-v1", "lore-workspace-v2", "lore-workspace-v3"] as const) {
+  for (const format of [
+    "lore-workspace-v1",
+    "lore-workspace-v2",
+    "lore-workspace-v3",
+    "lore-workspace-v4",
+  ] as const) {
     const selected = archive();
     selected.manifest.format = format;
     expect(parseWorkspaceArchiveText(JSON.stringify(selected)).manifest.format).toBe(format);
   }
-  for (const format of ["lore-workspace-v4", "LORE-WORKSPACE-V3", "", 2, null, undefined]) {
+  for (const format of ["lore-workspace-v5", "LORE-WORKSPACE-V4", "", 2, null, undefined]) {
     const selected = { ...archive(), manifest: { ...archive().manifest, format } };
     expect(() => parseWorkspaceArchiveText(JSON.stringify(selected)), String(format)).toThrow(
-      "Archive format must be lore-workspace-v1 or lore-workspace-v2 or lore-workspace-v3.",
+      "Archive format must be lore-workspace-v1 or lore-workspace-v2 or lore-workspace-v3 or lore-workspace-v4.",
     );
   }
 });

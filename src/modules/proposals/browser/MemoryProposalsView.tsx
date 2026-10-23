@@ -412,6 +412,19 @@ export function MemoryProposalsView({
                 </section>
               )}
 
+              {selected.proposedOccurredAt !== undefined && (
+                <section className="proposal-content-block">
+                  <h3>Proposed time it happened</h3>
+                  <div>
+                    {selected.proposedOccurredAt === null
+                      ? selected.kind === "update"
+                        ? "Remove the time"
+                        : "No time"
+                      : `${utcDate(selected.proposedOccurredAt)} UTC`}
+                  </div>
+                </section>
+              )}
+
               <section className="proposal-content-block">
                 <h3>Proposed content</h3>
                 <div>{proposedText?.content}</div>

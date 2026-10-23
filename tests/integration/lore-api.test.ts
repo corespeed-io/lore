@@ -26,6 +26,7 @@ function memory(index: number): Memory {
     scope: "shared",
     title: null,
     gloss: null,
+    occurredAt: null,
     content: `Memory ${index}`,
     metadata: {},
     version: 1,

@@ -16,6 +16,8 @@ import {
   memoryType,
   metadataLabel,
   metadataSource,
+  occurredAtFromInput,
+  occurredAtInputValue,
   plain,
   plainInline,
   revealHidden,
@@ -43,6 +45,7 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     scope: "private",
     title: null,
     gloss: null,
+    occurredAt: null,
     content: "A durable fact",
     metadata: {},
     version: 1,
@@ -749,5 +752,20 @@ test("metadata source grows with the metadata, however deeply it nests", () => {
   };
   expect(metadataSource({ deep: overflowing, type: "decision" })).toBe(
     '{\n  "deep": ⟨nests too deeply to show⟩,\n  "type": "decision"\n}',
+  );
+});
+
+test("the editor reads and writes occurredAt as UTC datetime-local text", () => {
+  expect(occurredAtInputValue(null)).toBe("");
+  // To the second; the stored microseconds stay unless the input is changed.
+  expect(occurredAtInputValue("2023-05-26T10:00:00.123456Z")).toBe("2023-05-26T10:00:00");
+  expect(occurredAtInputValue("not a time")).toBe("");
+  expect(occurredAtFromInput("")).toBeNull();
+  expect(occurredAtFromInput("  ")).toBeNull();
+  // A browser omits zero seconds; the server needs them.
+  expect(occurredAtFromInput("2023-05-26T10:00")).toBe("2023-05-26T10:00:00Z");
+  expect(occurredAtFromInput("2023-05-26T10:00:05")).toBe("2023-05-26T10:00:05Z");
+  expect(occurredAtFromInput(occurredAtInputValue("1999-12-31T23:59:59.000000Z"))).toBe(
+    "1999-12-31T23:59:59Z",
   );
 });

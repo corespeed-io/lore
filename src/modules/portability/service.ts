@@ -15,6 +15,7 @@ import {
   validateMemoryLink,
   validateMemoryScope,
   validateOptionalMemoryGloss,
+  validateOptionalMemoryOccurredAt,
   validateOptionalMemoryTitle,
 } from "@corespeed/lore-core";
 import { createMemoryMutationPrimitives } from "@/modules/memories/service";
@@ -27,6 +28,7 @@ import {
   MAX_WORKSPACE_ARCHIVE_BYTES,
   MAX_WORKSPACE_ARCHIVE_LINKS,
   MAX_WORKSPACE_ARCHIVE_MEMORIES,
+  TIMED_WORKSPACE_ARCHIVE_FORMATS,
   TITLED_WORKSPACE_ARCHIVE_FORMATS,
   WORKSPACE_ARCHIVE_FORMAT,
   WORKSPACE_ARCHIVE_FORMATS,
@@ -34,9 +36,9 @@ import {
 } from "./limits";
 
 // Upper bounds for each serialized record beyond its measured JSON content (or kind),
-// title, gloss, and metadata: ids, timestamps, version or weight, property names, and
-// separators.
-const ARCHIVE_MEMORY_OVERHEAD_BYTES = 256;
+// title, gloss, and metadata: ids, timestamps (occurredAt included), version or
+// weight, property names, and separators. A Memory needs at most about 306.
+const ARCHIVE_MEMORY_OVERHEAD_BYTES = 320;
 const ARCHIVE_LINK_OVERHEAD_BYTES = 320;
 const ARCHIVE_MANIFEST_BYTES = 1_024;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -64,6 +66,8 @@ export interface WorkspaceArchiveMemory {
   title?: string | null;
   /** Present, string or null, wherever `title` is; absent before v3. */
   gloss?: string | null;
+  /** Present, RFC 3339 or null, in a format that carries it (v4 on); absent before. */
+  occurredAt?: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;
@@ -125,6 +129,7 @@ interface ExportMemoryRow {
   scope: MemoryScope;
   title: string | null;
   gloss: string | null;
+  occurred_at: Date | string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;
@@ -392,6 +397,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
     throw new PortabilityValidationError("archive manifest counts do not match its records");
   }
   const titled = TITLED_WORKSPACE_ARCHIVE_FORMATS.includes(archive.manifest.format);
+  const timed = TIMED_WORKSPACE_ARCHIVE_FORMATS.includes(archive.manifest.format);
   const memoryIds = new Set<string>();
   const normalizedMemories: NormalizedArchiveMemory[] = [];
   for (const [index, memory] of archive.memories.entries()) {
@@ -429,6 +435,21 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
         }
       }
     }
+    // A timed format states every occurredAt, null for none, as a titled one states
+    // titles; the engine's rule decides it, and the UTC instant is what is written.
+    let occurredAt: string | null = null;
+    if (timed) {
+      if (memory.occurredAt === undefined) {
+        throw new PortabilityValidationError(`memories[${index}].occurredAt is required`);
+      }
+      occurredAt = archiveRule(() =>
+        validateOptionalMemoryOccurredAt(memory.occurredAt, `memories[${index}].occurredAt`),
+      );
+    } else if (memory.occurredAt !== undefined) {
+      throw new PortabilityValidationError(
+        `memories[${index}].occurredAt requires format ${TIMED_WORKSPACE_ARCHIVE_FORMATS.join(" or ")}`,
+      );
+    }
     // Chunking is the content rule. Keep the result so the insert does not chunk again.
     let preparedContent: PreparedMemoryContent;
     try {
@@ -453,6 +474,7 @@ function normalizedArchive(archive: WorkspaceArchive): NormalizedArchive {
       scope,
       title,
       gloss,
+      occurredAt,
       content: memory.content,
       preparedContent,
       metadata: normalizedMetadata,
@@ -587,7 +609,7 @@ export function createPortabilityModule(
              FROM sized
            )
            SELECT memory.id, memory.owner_user_id, memory.scope, memory.title, memory.gloss,
-                  memory.content,
+                  memory.occurred_at, memory.content,
                   memory.metadata, memory.version, memory.created_at, memory.updated_at,
                   budgeted.running_bytes::float8 AS running_bytes
            FROM budgeted
@@ -676,6 +698,7 @@ export function createPortabilityModule(
           scope: memory.scope,
           title: memory.title,
           gloss: memory.gloss,
+          occurredAt: memory.occurred_at === null ? null : exportedTimestamp(memory.occurred_at),
           content: memory.content,
           metadata: memory.metadata,
           version: memory.version,
@@ -833,6 +856,7 @@ export function createPortabilityModule(
             scope: memory.scope,
             title: memory.title ?? null,
             gloss: memory.gloss ?? null,
+            occurredAt: memory.occurredAt ?? null,
             content: memory.content,
             preparedContent: memory.preparedContent,
             metadata: memory.metadata,

@@ -255,6 +255,26 @@ export function shortMemoryDate(value: string): string {
   return Number.isNaN(date.getTime()) ? "" : SHORT_DATE_FORMAT.format(date);
 }
 
+/**
+ * A Memory's occurredAt as a `datetime-local` input value in UTC, to the second, or
+ * "" for none. The editor reads and writes UTC, as every date label does.
+ */
+export function occurredAtInputValue(occurredAt: string | null): string {
+  if (occurredAt === null) return "";
+  const date = new Date(occurredAt);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString().slice(0, 19);
+}
+
+/**
+ * A `datetime-local` input value, read as UTC, as the RFC 3339 occurredAt the server
+ * takes, or null when the input is empty. A value without seconds gets ":00".
+ */
+export function occurredAtFromInput(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return `${/T\d{2}:\d{2}$/.test(trimmed) ? `${trimmed}:00` : trimmed}Z`;
+}
+
 const PREFERRED_TYPE_ORDER = ["concept", "product", "person", "company"];
 
 export function typeLabel(type: string): string {

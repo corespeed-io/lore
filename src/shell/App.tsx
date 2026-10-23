@@ -17,6 +17,7 @@ import { buildGraphStore, graphNeighbors } from "@/modules/graph/browser/store";
 import { type GraphData, isGraphCapped } from "@/modules/graph/browser/types";
 import { useLoreMemories, useLoreMemory, useLoreSearch } from "@/modules/memories/browser/data";
 import { MemoryView } from "@/modules/memories/browser/MemoryView";
+import { occurredAtFromInput, occurredAtInputValue } from "@/modules/memories/browser/presentation";
 import { SearchResults } from "@/modules/memories/browser/SearchResults";
 import { WorkspaceOperationsView } from "@/modules/operations/browser/WorkspaceOperationsView";
 import { MemoryProposalsView } from "@/modules/proposals/browser/MemoryProposalsView";
@@ -297,6 +298,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
     scope: MemoryScope,
     title: string | null,
     gloss: string | null,
+    occurredAt: string | null | undefined,
   ) {
     if (!activeWorkspaceId || !editor) return;
     setMutationError(null);
@@ -307,6 +309,7 @@ export function App({ appTitle, appSubtitle }: AppProps) {
         scope,
         title,
         gloss,
+        occurredAt,
         version: editor.memory?.version,
       });
       await applyMemoryChange({ kind: "saved", memory: saved }, memoryCaches);
@@ -640,11 +643,16 @@ function MemoryEditor({
     scope: MemoryScope,
     title: string | null,
     gloss: string | null,
+    /** A new time, null to remove it, or undefined to keep it. */
+    occurredAt: string | null | undefined,
   ) => Promise<void>;
 }) {
   const [content, setContent] = useState(memory?.content ?? "");
   const [title, setTitle] = useState(memory?.title ?? "");
   const [gloss, setGloss] = useState(memory?.gloss ?? "");
+  // The input keeps whole seconds; an untouched one keeps the stored time exactly.
+  const initialOccurredAt = occurredAtInputValue(memory?.occurredAt ?? null);
+  const [occurredAt, setOccurredAt] = useState(initialOccurredAt);
   const [scope, setScope] = useState<MemoryScope>(memory?.scope ?? "shared");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const contentCharacterCount = Array.from(content).length;
@@ -684,7 +692,13 @@ function MemoryEditor({
           onSubmit={(event) => {
             event.preventDefault();
             if (content.trim() && !contentTooLong && !titleTooLong && !glossTooLong) {
-              void onSave(content.trim(), scope, title.trim() || null, gloss.trim() || null);
+              void onSave(
+                content.trim(),
+                scope,
+                title.trim() || null,
+                gloss.trim() || null,
+                occurredAt === initialOccurredAt ? undefined : occurredAtFromInput(occurredAt),
+              );
             }
           }}
         >
@@ -763,6 +777,18 @@ function MemoryEditor({
             {glossTooLong
               ? `${glossCharacterCount.toLocaleString()} /${MEMORY_GLOSS_CHARACTERS.toLocaleString()} characters`
               : "For content not in English: its meaning in English, so English search finds it."}
+          </p>
+          <label htmlFor="memory-editor-occurred-at-input">Happened (UTC)</label>
+          <input
+            id="memory-editor-occurred-at-input"
+            type="datetime-local"
+            step={1}
+            value={occurredAt}
+            aria-describedby="memory-editor-occurred-at-guidance"
+            onChange={(event) => setOccurredAt(event.target.value)}
+          />
+          <p id="memory-editor-occurred-at-guidance" className="memory-editor-guidance">
+            Optional: when the event this Memory records happened, not when you write it.
           </p>
           <fieldset className="memory-scope-control">
             <legend>Visibility</legend>

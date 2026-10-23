@@ -11,6 +11,8 @@ import { benchmarkEndpoint } from "./benchmark-endpoint";
 export interface BenchmarkReaderEvidence {
   id: string;
   text: string;
+  /** When the evidence's event happened (its Memory's occurredAt), shown on its tag. */
+  occurredAt?: string;
 }
 
 export interface BenchmarkReaderImage {
@@ -164,7 +166,8 @@ export function renderBenchmarkReaderInput(
   let remaining = Math.max(0, maximumCharacters - header.length - footer.length);
   const blocks: string[] = [];
   for (const [index, item] of evidence.entries()) {
-    const prefix = `\n\n<evidence rank="${index + 1}" id="${item.id}">\n`;
+    const occurredAt = item.occurredAt ? ` occurred-at="${item.occurredAt}"` : "";
+    const prefix = `\n\n<evidence rank="${index + 1}" id="${item.id}"${occurredAt}>\n`;
     const suffix = "\n</evidence>";
     if (remaining <= prefix.length + suffix.length) break;
     const available = remaining - prefix.length - suffix.length;

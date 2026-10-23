@@ -260,6 +260,52 @@ describe("update writes only what differs", () => {
     ).toMatchObject({ version: 2 });
   });
 
+  test("an occurredAt is set, changed, and removed alone, keeping chunks and vectors", async () => {
+    const created = await memories.remember({
+      content: "The harbour chain was raised at dusk.",
+      occurredAt: "2023-05-26T18:00:00+08:00",
+    });
+    // Stored and returned as its UTC instant, at the column's microsecond precision.
+    expect(created).toMatchObject({ version: 1, occurredAt: "2023-05-26T10:00:00.000000Z" });
+    await embedEveryChunk(created.id);
+    const chunks = await chunksOf(created.id);
+    const vectors = await vectorChunkIds(created.id);
+    notified = [];
+
+    // The same instant written with another offset changes nothing.
+    expect(
+      await memories.update(
+        created.id,
+        { occurredAt: "2023-05-26T10:00:00Z" },
+        { expectedVersion: 1 },
+      ),
+    ).toMatchObject({ version: 1, updatedAt: created.updatedAt });
+    const moved = await memories.update(
+      created.id,
+      { occurredAt: "2023-05-25T10:00:00.250Z" },
+      { expectedVersion: 1 },
+    );
+    expect(moved).toMatchObject({
+      version: 2,
+      occurredAt: "2023-05-25T10:00:00.250000Z",
+      content: created.content,
+    });
+    // Omitting it keeps it; null removes it, and removing an absent one changes nothing.
+    expect(
+      await memories.update(created.id, { scope: "private" }, { expectedVersion: 2 }),
+    ).toMatchObject({ version: 3, occurredAt: "2023-05-25T10:00:00.250000Z" });
+    expect(
+      await memories.update(created.id, { occurredAt: null }, { expectedVersion: 3 }),
+    ).toMatchObject({ version: 4, occurredAt: null });
+    expect(
+      await memories.update(created.id, { occurredAt: null }, { expectedVersion: 4 }),
+    ).toMatchObject({ version: 4, occurredAt: null });
+    expect(await chunksOf(created.id)).toEqual(chunks);
+    expect(await vectorChunkIds(created.id)).toEqual(vectors);
+    expect(notified).toEqual([]);
+    expect((await memories.remember({ content: "No time given." })).occurredAt).toBeNull();
+  });
+
   test("a scope-only change keeps chunks and vectors", async () => {
     const created = await memories.remember({ content: "Night watch rotates every four hours." });
     await embedEveryChunk(created.id);

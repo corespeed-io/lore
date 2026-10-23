@@ -662,6 +662,8 @@ export interface components {
                 /** @constant */
                 readonly memoryLinks: true;
                 /** @constant */
+                readonly memoryOccurredAt: true;
+                /** @constant */
                 readonly memoryProposals: true;
                 /** @constant */
                 readonly memoryTitles: true;
@@ -898,6 +900,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: components["schemas"]["JsonValue"];
             };
+            readonly occurredAt?: string | null;
             /**
              * @default shared
              * @enum {string}
@@ -919,6 +922,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: unknown;
             };
+            readonly occurredAt?: string | null;
             /**
              * @default shared
              * @enum {string}
@@ -927,7 +931,7 @@ export interface components {
             readonly title?: string | null;
         };
         readonly CreateMemoryProposalInput: components["schemas"]["CreateMemoryProposalCreateInput"] | components["schemas"]["CreateMemoryProposalUpdateInput"];
-        readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateTitleInput"] | components["schemas"]["MemoryProposalUpdateGlossInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
+        readonly CreateMemoryProposalUpdateInput: components["schemas"]["MemoryProposalUpdateContentInput"] | components["schemas"]["MemoryProposalUpdateScopeInput"] | components["schemas"]["MemoryProposalUpdateTitleInput"] | components["schemas"]["MemoryProposalUpdateGlossInput"] | components["schemas"]["MemoryProposalUpdateOccurredAtInput"] | components["schemas"]["MemoryProposalUpdateMetadataInput"];
         readonly EnqueueCodeIndexInput: {
             readonly commitOid: string;
             readonly repositoryKey: string;
@@ -1126,6 +1130,7 @@ export interface components {
             readonly metadata: {
                 readonly [key: string]: components["schemas"]["JsonValue"];
             };
+            readonly occurredAt: string | null;
             /** Format: uuid */
             readonly ownerUserId: string;
             /** @enum {string} */
@@ -1263,6 +1268,8 @@ export interface components {
             readonly proposedMetadata: {
                 readonly [key: string]: unknown;
             };
+            /** @description When the Memory's event happened, as a create gives it (null for none) or an update sets it (null removes it). Absent from an update that keeps the target's. */
+            readonly proposedOccurredAt?: string | null;
             /** @enum {string} */
             readonly proposedScope: "shared" | "private";
             /** @description The title a create gives its Memory (null for none), or the title an update sets (null removes it). Absent from an update that keeps the target's title. */
@@ -1314,6 +1321,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: unknown;
             };
+            readonly occurredAt?: string | null;
             /** @enum {string} */
             readonly scope?: "shared" | "private";
             /** Format: uuid */
@@ -1335,6 +1343,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: unknown;
             };
+            readonly occurredAt?: string | null;
             /** @enum {string} */
             readonly scope?: "shared" | "private";
             /** Format: uuid */
@@ -1356,6 +1365,29 @@ export interface components {
             readonly metadata: {
                 readonly [key: string]: unknown;
             };
+            readonly occurredAt?: string | null;
+            /** @enum {string} */
+            readonly scope?: "shared" | "private";
+            /** Format: uuid */
+            readonly targetMemoryId: string;
+            readonly title?: string | null;
+        };
+        readonly MemoryProposalUpdateOccurredAtInput: {
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly codeEvidence?: readonly components["schemas"]["ProposeMemoryCodeEvidenceInput"][];
+            readonly content?: string;
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly evidenceMemoryIds?: readonly string[];
+            /** @description Memory, Observation, and Code evidence have a combined limit of 50. */
+            readonly evidenceObservationIds?: readonly string[];
+            readonly expectedVersion: number;
+            readonly gloss?: string | null;
+            /** @constant */
+            readonly kind: "update";
+            readonly metadata?: {
+                readonly [key: string]: unknown;
+            };
+            readonly occurredAt: string | null;
             /** @enum {string} */
             readonly scope?: "shared" | "private";
             /** Format: uuid */
@@ -1377,6 +1409,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: unknown;
             };
+            readonly occurredAt?: string | null;
             /** @enum {string} */
             readonly scope: "shared" | "private";
             /** Format: uuid */
@@ -1398,6 +1431,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: unknown;
             };
+            readonly occurredAt?: string | null;
             /** @enum {string} */
             readonly scope?: "shared" | "private";
             /** Format: uuid */
@@ -1580,6 +1614,8 @@ export interface components {
             readonly gloss: string | null;
             /** Format: uuid */
             readonly id: string;
+            /** @description When the Memory's event happened, as its writer stated it, or null for none; updatedAt is when Lore last changed the Memory. */
+            readonly occurredAt: string | null;
             readonly rerankScore?: number;
             /** @enum {string} */
             readonly scope: "shared" | "private";
@@ -1615,6 +1651,7 @@ export interface components {
             readonly metadata?: {
                 readonly [key: string]: components["schemas"]["JsonValue"];
             };
+            readonly occurredAt?: string | null;
             /** @enum {string} */
             readonly scope?: "shared" | "private";
             readonly title?: string | null;
@@ -1672,10 +1709,10 @@ export interface components {
             /** Format: date-time */
             readonly exportedAt: string;
             /**
-             * @description Import accepts every listed format; export writes lore-workspace-v3.
+             * @description Import accepts every listed format; export writes lore-workspace-v4.
              * @enum {string}
              */
-            readonly format: "lore-workspace-v1" | "lore-workspace-v2" | "lore-workspace-v3";
+            readonly format: "lore-workspace-v1" | "lore-workspace-v2" | "lore-workspace-v3" | "lore-workspace-v4";
             readonly linkCount: number;
             readonly memoryCount: number;
             /** Format: uuid */
@@ -1689,18 +1726,20 @@ export interface components {
             readonly content: string;
             /** Format: date-time */
             readonly createdAt: string;
-            /** @description Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a gloss. */
+            /** @description Required, null for none, in lore-workspace-v3 and lore-workspace-v4; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a gloss. */
             readonly gloss?: string | null;
             /** Format: uuid */
             readonly id: string;
             readonly metadata: {
                 readonly [key: string]: unknown;
             };
+            /** @description When the Memory's event happened. Required, null for none, in lore-workspace-v4; absent from earlier formats, which cannot carry it. */
+            readonly occurredAt?: string | null;
             /** Format: uuid */
             readonly ownerUserId: string;
             /** @enum {string} */
             readonly scope: "shared" | "private";
-            /** @description Required, null for none, in lore-workspace-v3; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a title. */
+            /** @description Required, null for none, in lore-workspace-v3 and lore-workspace-v4; absent from lore-workspace-v1 and lore-workspace-v2, which cannot carry a title. */
             readonly title?: string | null;
             /** Format: date-time */
             readonly updatedAt: string;

@@ -49,6 +49,15 @@ export const memoryGlossSchema = {
   ],
 } as const;
 
+/**
+ * When the event or statement a Memory records happened, as its writer states it: an
+ * RFC 3339 date-time with an offset, in the UTC years 0001 through 9999, or null for
+ * none. The engine keeps its UTC instant to the millisecond.
+ */
+export const memoryOccurredAtSchema = {
+  oneOf: [{ type: "string", format: "date-time" }, { type: "null" }],
+} as const;
+
 /** What every search that takes translations says about them. */
 export const SEARCH_TRANSLATIONS_DESCRIPTION =
   "The same question in other languages. Search runs each beside the query and fuses the results into one ranking, so it also finds what was written in those languages.";

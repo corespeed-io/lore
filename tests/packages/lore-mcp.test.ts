@@ -61,6 +61,7 @@ function memory(overrides: Partial<Memory> = {}): Memory {
     scope: "private",
     title: null,
     gloss: null,
+    occurredAt: null,
     content: "Only authorized content",
     metadata: { source: "test" },
     version: 2,
@@ -311,6 +312,7 @@ function maximalContext(options: { pathologicalEnvelope: boolean }): RetrievedCo
       scope: "shared" as const,
       title: null,
       gloss: null,
+      occurredAt: null,
       updatedAt: "2026-08-09T00:00:00.000Z",
       score: 0.9,
       evidence: "authorized-evidence-".repeat(1_000),
@@ -465,6 +467,7 @@ describe("Lore external MCP adapter", () => {
           scope: "private",
           title: null,
           gloss: null,
+          occurredAt: null,
           updatedAt: memory().updatedAt,
           score: 0.9,
           evidence: "The guard was introduced for tenant isolation.",
@@ -707,7 +710,7 @@ describe("Lore external MCP adapter", () => {
     });
     expect(empty.isError).toBe(true);
     expect(JSON.stringify(empty.content)).toContain(
-      "content, scope, title, gloss, or metadata is required",
+      "content, scope, title, gloss, occurredAt, or metadata is required",
     );
   });
 
@@ -1148,6 +1151,85 @@ describe("Lore external MCP adapter", () => {
       arguments: { content: "港口", gloss: "x".repeat(513) },
     });
     expect(refused.isError).toBe(true);
+  });
+
+  test("asks for occurredAt, passes it through every write, and returns it with search results", async () => {
+    const memories = fakeMemories();
+    const dated = memory({ occurredAt: "2023-05-26T10:00:00.000000Z" });
+    vi.mocked(memories.remember).mockResolvedValue(dated);
+    vi.mocked(memories.updateMemory).mockResolvedValue(memory({ occurredAt: null, version: 3 }));
+    vi.mocked(memories.proposeMemory).mockResolvedValue(proposal());
+    vi.mocked(memories.searchMemories).mockResolvedValue([
+      { memory: dated, score: 0.5, evidence: "The launch moved to Friday." },
+    ]);
+    const client = await connect(memories);
+    const { tools } = await client.listTools();
+    for (const name of ["lore_remember", "lore_update", "lore_propose"]) {
+      expect(tools.find((tool) => tool.name === name)?.description, name).toContain(
+        "also send occurredAt: when it happened",
+      );
+    }
+    // The search tool says what occurredAt means, apart from createdAt and updatedAt.
+    expect(tools.find((tool) => tool.name === "lore_search")?.description).toContain(
+      "A Memory's occurredAt, when present, is when its event happened",
+    );
+
+    const remembered = await client.callTool({
+      name: "lore_remember",
+      arguments: {
+        content: "The launch moved to Friday.",
+        occurredAt: "2023-05-26T18:00:00+08:00",
+      },
+    });
+    // The server keeps the instant; the client sends the writer's text.
+    expect(memories.remember).toHaveBeenCalledWith(
+      expect.objectContaining({ occurredAt: "2023-05-26T18:00:00+08:00" }),
+      expect.anything(),
+    );
+    expect(remembered.structuredContent).toMatchObject({
+      memory: { occurredAt: "2023-05-26T10:00:00.000000Z" },
+    });
+    await client.callTool({
+      name: "lore_update",
+      arguments: { memoryId: MEMORY_ID, version: 2, occurredAt: null },
+    });
+    expect(memories.updateMemory).toHaveBeenCalledWith(
+      MEMORY_ID,
+      expect.objectContaining({ occurredAt: null }),
+      expect.anything(),
+    );
+    const moved = await client.callTool({
+      name: "lore_propose",
+      arguments: {
+        kind: "update",
+        targetMemoryId: MEMORY_ID,
+        expectedVersion: 2,
+        occurredAt: "2023-05-27T09:00:00Z",
+      },
+    });
+    expect(moved.isError).not.toBe(true);
+    expect(vi.mocked(memories.proposeMemory).mock.calls.at(-1)?.[0]).toEqual({
+      kind: "update",
+      targetMemoryId: MEMORY_ID,
+      expectedVersion: 2,
+      occurredAt: "2023-05-27T09:00:00Z",
+    });
+    const found = await client.callTool({
+      name: "lore_search",
+      arguments: { query: "When is the launch?" },
+    });
+    expect(found.structuredContent).toMatchObject({
+      results: [{ memory: { occurredAt: "2023-05-26T10:00:00.000000Z" } }],
+    });
+
+    for (const occurredAt of ["2023-05-26", "last Friday", "2023-05-26T10:00:00"]) {
+      const refused = await client.callTool({
+        name: "lore_remember",
+        arguments: { content: "A fact.", occurredAt },
+      });
+      expect(refused.isError, occurredAt).toBe(true);
+    }
+    expect(memories.remember).toHaveBeenCalledOnce();
   });
 
   test("rejects document-sized Memory content before calling Lore", async () => {

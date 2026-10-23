@@ -195,8 +195,10 @@ seeding.
 - **Reader:** `gemini-3.5-flash`. The Google Interactions API at temperature 0,
   with the dataset's instruction and a 24,000-unit cap.
 - **Judges:**
-  - `gpt-5.6-sol`: a logged-in Codex CLI (the default; GPT-5.5 left ChatGPT Codex
-    on 2026-10-14).
+  - `gpt-5.6-luna`: a logged-in Codex CLI, at low reasoning effort (the default
+    since 2026-10-23).
+  - `gpt-5.6-sol`: a logged-in Codex CLI, at low reasoning effort (the default from
+    2026-10-14, when GPT-5.5 left ChatGPT Codex, until 2026-10-23).
   - `gpt-4o`: through the Vercel AI Gateway, with `AI_GATEWAY_API_KEY`.
 
 A profile's identity is part of every cache key. When a judge disappears, rerun
