@@ -65,6 +65,7 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
         MemoryProposalUpdateMetadataInput: { required: readonly string[] };
         MemoryProposalUpdateScopeInput: { required: readonly string[] };
         MemoryProposalUpdateTitleInput: { required: readonly string[] };
+        MemoryProposalUpdateOccurredAtInput: { required: readonly string[] };
         MemoryProposalUpdateGlossInput: { required: readonly string[] };
         Memory: { required: readonly string[]; properties: { title: unknown; gloss: unknown } };
         CreateMemoryInput: { required: readonly string[] };
@@ -228,15 +229,20 @@ test("OpenAPI publishes every stable v1 route and bounded error codes", () => {
     memoryLinks: { const: true },
     memoryTitles: { const: true },
     memoryGlosses: { const: true },
+    memoryOccurredAt: { const: true },
   });
   expect(document.components.schemas.CreateMemoryProposalUpdateInput.anyOf).toEqual([
     { $ref: "#/components/schemas/MemoryProposalUpdateContentInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateScopeInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateTitleInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateGlossInput" },
+    { $ref: "#/components/schemas/MemoryProposalUpdateOccurredAtInput" },
     { $ref: "#/components/schemas/MemoryProposalUpdateMetadataInput" },
   ]);
   expect(document.components.schemas.MemoryProposalUpdateTitleInput.required).toContain("title");
+  expect(document.components.schemas.MemoryProposalUpdateOccurredAtInput.required).toContain(
+    "occurredAt",
+  );
   expect(document.components.schemas.MemoryProposalUpdateGlossInput.required).toContain("gloss");
   // A title is optional on every write and nullable everywhere it is read.
   expect(document.components.schemas.Memory.required).toEqual(

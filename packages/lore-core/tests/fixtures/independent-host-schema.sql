@@ -88,6 +88,7 @@ CREATE TABLE memories (
   scope memory_scope NOT NULL,
   title text,
   gloss text,
+  occurred_at timestamptz,
   content text NOT NULL,
   metadata jsonb NOT NULL DEFAULT '{}',
   version integer NOT NULL DEFAULT 1,

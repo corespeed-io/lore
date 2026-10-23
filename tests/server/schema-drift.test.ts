@@ -5,6 +5,7 @@ import {
   MEMORY_LINK_LIMITS,
   type MemoryScope,
   validateMemoryGloss,
+  validateMemoryOccurredAt,
   validateMemoryTitle,
 } from "@corespeed/lore-core";
 import {
@@ -273,6 +274,53 @@ test("the title and gloss CHECKs accept exactly what their validators accept", a
       name,
     ).toEqual([]);
     expect(accepted).toHaveLength(candidates.length);
+  }
+  await testContext.close();
+});
+
+test("the occurredAt CHECKs accept exactly the instants their validator accepts", async () => {
+  const testContext = await createMemoryTestContext();
+  const constraints = await constraintDefinitions(testContext);
+  // The edges of the four-digit UTC years, with offsets that cross them.
+  const candidates = [
+    "0001-01-01T00:00:00Z",
+    "0001-01-01T00:30:00+01:00",
+    "0001-01-01T00:30:00-01:00",
+    "0099-03-01T00:00:00Z",
+    "1969-12-31T23:59:59.999Z",
+    "2023-05-26T18:00:00+08:00",
+    "9999-12-31T23:59:59.999Z",
+    "9999-12-31T23:30:00-01:00",
+    "9999-12-31T23:30:00+01:00",
+  ];
+  const engine = candidates.map((candidate) => {
+    try {
+      validateMemoryOccurredAt(candidate);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  expect(engine).toContain(false);
+  for (const [name, column] of [
+    ["memories_occurred_at_check", "occurred_at"],
+    ["memory_proposals_proposed_occurred_at_check", "proposed_occurred_at"],
+  ] as const) {
+    const expression = capture(constraints.get(name), /^CHECK \((.*)\)$/s).replace(
+      new RegExp(`\\b${column}\\b`, "g"),
+      "candidate",
+    );
+    const accepted = await asAdmin<{ accepted: boolean }>(
+      testContext,
+      `SELECT (${expression}) AS accepted
+       FROM unnest($1::timestamptz[]) WITH ORDINALITY AS input(candidate, ordinal)
+       ORDER BY ordinal`,
+      [candidates],
+    );
+    expect(
+      accepted.map((row) => row.accepted),
+      name,
+    ).toEqual(engine);
   }
   await testContext.close();
 });

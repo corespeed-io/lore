@@ -11,6 +11,7 @@ import {
 import {
   jsonResponse,
   memoryGlossSchema,
+  memoryOccurredAtSchema,
   memoryScopeSchema,
   memoryTitleSchema,
   metadataSchema,
@@ -120,12 +121,17 @@ export const contextSchemas = {
   RetrievedMemoryContext: {
     type: "object",
     additionalProperties: false,
-    required: ["id", "scope", "title", "gloss", "updatedAt", "score", "evidence"],
+    required: ["id", "scope", "title", "gloss", "occurredAt", "updatedAt", "score", "evidence"],
     properties: {
       id: { type: "string", format: "uuid" },
       scope: memoryScopeSchema,
       title: memoryTitleSchema,
       gloss: memoryGlossSchema,
+      occurredAt: {
+        ...memoryOccurredAtSchema,
+        description:
+          "When the Memory's event happened, as its writer stated it, or null for none; updatedAt is when Lore last changed the Memory.",
+      },
       updatedAt: { type: "string", format: "date-time" },
       score: { type: "number" },
       rerankScore: { type: "number", minimum: 0, maximum: 1 },

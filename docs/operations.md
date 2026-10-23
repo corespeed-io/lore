@@ -70,15 +70,18 @@ connection resets) is 400 `invalid_request`, not a server error.
 - Links only when both endpoints are present;
 - source ownership/timestamps for explicit import provenance.
 
-Export writes the `lore-workspace-v3` format. Import accepts it and the earlier
-`lore-workspace-v2` and `lore-workspace-v1`. v1 and v2 differ only in how the
-checksum orders object keys (v2 by code unit, identically in every runtime; v1 by
-the runtime's default-locale collation). v3 orders keys as v2 does and gives every
-Memory a `title` and a `gloss`, null for none, which the earlier formats cannot
-carry: a v3 Memory without them, or a v1 or v2 Memory with either, is refused. So an archive exported by an
-earlier release still imports. The reverse does not hold: a release older than
-schema revision 15 refuses a v3 archive, and one older than revision 9 also a v2
-archive, with `invalid_archive`, writing nothing. Upgrade the target deployment
+Export writes the `lore-workspace-v4` format. Import accepts it and the earlier
+`lore-workspace-v3`, `lore-workspace-v2`, and `lore-workspace-v1`. v1 and v2 differ
+only in how the checksum orders object keys (v2 by code unit, identically in every
+runtime; v1 by the runtime's default-locale collation). v3 orders keys as v2 does and
+gives every Memory a `title` and a `gloss`, null for none, which the earlier formats
+cannot carry: a v3 Memory without them, or a v1 or v2 Memory with either, is refused.
+v4 orders keys as v3 does and also gives every Memory an `occurredAt`, null for none:
+a v4 Memory without it, or an earlier Memory with it, is refused. So an archive
+exported by an earlier release still imports. The reverse does not hold: a release
+older than schema revision 18 refuses a v4 archive, one older than revision 15 also
+a v3 archive, and one older than revision 9 also a v2 archive, with
+`invalid_archive`, writing nothing. Upgrade the target deployment
 before moving a Workspace to it; the manifest `format` enum in its `/openapi.json`
 lists every format it imports.
 
@@ -654,6 +657,20 @@ field, keeps both when it updates a Memory, and gets the name channels in its
 lexical search. It cannot accept a Proposal that sets either: the review guard
 refuses the receipt rather than let it be lost, for as long as the rolling deploy
 lasts.
+
+`0018` and `0019` add when a Memory's event happened (`occurred_at`) and keep
+`compatible_from` at 9. `0018` is transactional under the 5-second `lock_timeout`:
+it takes ACCESS EXCLUSIVE on `memories` and then `memory_proposals` to add the
+column, its Proposal counterparts, and NOT VALID CHECKs (catalog-only, so each lock
+lasts milliseconds once granted), and replaces the outbox trigger, the Proposal
+review guard, and `lore.portable_core_capabilities()`; it also adds a 19-argument
+`lore.submit_memory_proposal` beside the 13- and 17-argument ones older instances
+call. `0019` validates the CHECKs under SHARE UPDATE EXCLUSIVE, which blocks neither
+reads nor writes. Nothing fills the column: existing Memories have no time, and the
+writing agent supplies one from now on. An older instance writes no time, keeps it
+when it updates a Memory, and cannot accept a Proposal that sets one: the review
+guard refuses the receipt rather than let it be lost, for as long as the rolling
+deploy lasts.
 
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a

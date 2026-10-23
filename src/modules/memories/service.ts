@@ -25,6 +25,7 @@ import {
   validateMemoryMetadata,
   validateMemoryScope,
   validateOptionalMemoryGloss,
+  validateOptionalMemoryOccurredAt,
   validateOptionalMemoryTitle,
 } from "@corespeed/lore-core";
 import {
@@ -161,6 +162,7 @@ export function writtenMemoryReplayBody(memoryId: string): SqlReplayBody {
              'scope', written ->> 'scope',
              'title', written -> 'title',
              'gloss', written -> 'gloss',
+             'occurredAt', written -> 'occurred_at',
              'content', written ->> 'content',
              'metadata', written -> 'metadata',
              'version', (written ->> 'version')::integer,
@@ -269,6 +271,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         input.scope === undefined &&
         input.title === undefined &&
         input.gloss === undefined &&
+        input.occurredAt === undefined &&
         input.metadata === undefined
       ) {
         return this.retrieve(actor, id);
@@ -277,6 +280,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
       if (input.scope !== undefined) validateMemoryScope(input.scope);
       if (input.title !== undefined) validateOptionalMemoryTitle(input.title);
       if (input.gloss !== undefined) validateOptionalMemoryGloss(input.gloss);
+      if (input.occurredAt !== undefined) validateOptionalMemoryOccurredAt(input.occurredAt);
       if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
       const keyed = Boolean(options.idempotency);
       try {

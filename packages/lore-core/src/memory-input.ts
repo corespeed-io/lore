@@ -94,6 +94,89 @@ export function validateOptionalMemoryGloss(value: unknown, field = "gloss"): st
   return value === null ? null : validateMemoryGloss(value, field);
 }
 
+export const MEMORY_OCCURRED_AT_LIMITS = {
+  /** The earliest and latest UTC years, so the RFC 3339 form keeps a four-digit year. */
+  minimumYear: 1,
+  maximumYear: 9999,
+} as const;
+
+/** An RFC 3339 date-time: date, `T`, time with seconds, optional fraction, and an offset. */
+const RFC_3339_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:([Zz])|([+-])(\d{2}):(\d{2}))$/;
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/**
+ * When the event or statement a Memory records happened, as its writer states it:
+ * an RFC 3339 date-time with an offset, such as `2023-05-26T10:00:00Z` or
+ * `2023-05-26T18:00:00+08:00`, whose instant falls in the UTC years 0001 through
+ * 9999. Returns that instant as UTC (`Date.prototype.toISOString`), kept to the
+ * millisecond. The engine never infers it from content and never moves a date
+ * into range; the schema's memories_occurred_at_check restates the range.
+ */
+export function validateMemoryOccurredAt(value: unknown, field = "occurredAt"): string {
+  const invalid = () =>
+    new LoreValidationError(
+      field,
+      `${field} must be an RFC 3339 date-time with an offset, such as 2023-05-26T10:00:00Z`,
+    );
+  if (typeof value !== "string") throw invalid();
+  const match = RFC_3339_DATE_TIME.exec(value);
+  if (!match) throw invalid();
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const offsetHours = match[10] === undefined ? 0 : Number(match[10]);
+  const offsetMinutes = match[11] === undefined ? 0 : Number(match[11]);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHours > 23 ||
+    offsetMinutes > 59
+  ) {
+    throw invalid();
+  }
+  const milliseconds = Number((match[7] ?? "").slice(0, 3).padEnd(3, "0"));
+  // Date.UTC reads years 0 through 99 as 1900 through 1999, so set the year itself.
+  const instant = new Date(0);
+  instant.setUTCFullYear(year, month - 1, day);
+  instant.setUTCHours(hour, minute, second, milliseconds);
+  const offset = (offsetHours * 60 + offsetMinutes) * (match[9] === "-" ? -1 : 1);
+  instant.setTime(instant.getTime() - offset * 60_000);
+  const utcYear = instant.getUTCFullYear();
+  if (
+    utcYear < MEMORY_OCCURRED_AT_LIMITS.minimumYear ||
+    utcYear > MEMORY_OCCURRED_AT_LIMITS.maximumYear
+  ) {
+    throw new LoreValidationError(
+      field,
+      `${field} must fall in the UTC years ${String(MEMORY_OCCURRED_AT_LIMITS.minimumYear).padStart(4, "0")} through ${MEMORY_OCCURRED_AT_LIMITS.maximumYear}`,
+    );
+  }
+  return instant.toISOString();
+}
+
+/** A time to write, or null for none. */
+export function validateOptionalMemoryOccurredAt(
+  value: unknown,
+  field = "occurredAt",
+): string | null {
+  return value === null ? null : validateMemoryOccurredAt(value, field);
+}
+
 export const MEMORY_METADATA_LIMITS = {
   /** `JSON.stringify` length of one metadata object, in UTF-16 code units. */
   maximumSerializedLength: 100_000,

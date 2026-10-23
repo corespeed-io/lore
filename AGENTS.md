@@ -70,7 +70,7 @@ Main rules (the reference sections have the full text):
   migration: its stored SHA-256 makes every deployment fail closed. Ship each
   schema change as a new forward-only migration, and keep its `down` section empty.
 - Each new migration must set `lore_system_state.schema_revision` to its own
-  number (currently 17) and set `compatible_from` in the same final UPDATE. In the
+  number (currently 19) and set `compatible_from` in the same final UPDATE. In the
   same change, bump `LATEST_SCHEMA_REVISION`
   (`scripts/database/lib/migration-preflight.ts`) and `LORE_SCHEMA_REVISION`
   (`src/modules/operations/service.ts`).
@@ -89,7 +89,9 @@ Main rules (the reference sections have the full text):
   migration, and a versioned evaluation. Its optional title (at most 256 characters)
   and English gloss (at most 512, for content in another language) are each one line,
   held to `validateMemoryTitle`/`validateMemoryGloss` and matching CHECKs; lexical
-  search reads them, but they are never chunked or embedded.
+  search reads them, but they are never chunked or embedded. Its optional
+  `occurredAt` (`validateMemoryOccurredAt`) is when its event happened, never
+  inferred from content.
 - UI, CLI, and MCP use the TypeScript SDK, which calls the OSS API. Components must
   not call `fetch` directly. Every bound, vocabulary, and default that a client
   checks comes from the SDK's `LORE_CONTRACT`.

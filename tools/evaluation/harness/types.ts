@@ -14,7 +14,11 @@ export interface CorpusRecord {
   text: string;
   /** Gold evidence for a record split into parts refers to this key instead. */
   anchorKey?: string;
-  observedAt?: string;
+  /**
+   * When the event or statement the record describes happened (RFC 3339), as its
+   * writer would state it; a system stores it as the Memory's occurredAt.
+   */
+  occurredAt?: string;
   metadata?: Record<string, string | number | boolean>;
   /** Keys of the Unit's sources this record was made from; a system may cite them. */
   cites?: string[];
@@ -86,6 +90,8 @@ export interface Dataset {
 export interface PacketItem {
   id: string;
   text: string;
+  /** When the item's event happened, as its Memory states it; the reader sees it. */
+  occurredAt?: string;
   /** Record keys this item came from, for retrieval metrics. */
   sourceKeys: string[];
 }

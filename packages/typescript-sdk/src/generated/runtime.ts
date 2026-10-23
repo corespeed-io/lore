@@ -31,7 +31,8 @@ export const LORE_CONTRACT = {
     "workspaceArchiveFormats": [
       "lore-workspace-v1",
       "lore-workspace-v2",
-      "lore-workspace-v3"
+      "lore-workspace-v3",
+      "lore-workspace-v4"
     ],
     "memoryScopes": [
       "shared",

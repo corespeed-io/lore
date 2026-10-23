@@ -63,14 +63,16 @@ requirements. `AGENTS.md` keeps the rules that apply to the whole project. Its
   primitives take `{ commit }` to commit in their final batch, which OSS passes
   when no idempotency ledger row is left to complete. An update is one locking
   read, which also reads the stored chunks when content is given, and one final
-  batch, and it writes only what differs: when content, scope, and metadata all
-  equal the locked row it writes nothing (same version, `updatedAt`, and ETag; no
+  batch, and it writes only what differs: when content, scope, title, gloss,
+  occurredAt, and metadata all equal the locked row it writes nothing (same version, `updatedAt`, and ETag; no
   event, no job; a keyed no-op still completes its ledger row with that body).
   Content changes are re-chunked in TypeScript and compared with the stored chunks
   by ordinal, so only differing ordinals and the removed tail are deleted and
   inserted (`lore_app` has no UPDATE on `memory_chunks`), and unchanged chunks keep
-  their ids and vectors; a prepend still re-embeds everything after it. Scope and
-  metadata changes never touch chunks. A job for the new version is queued only
+  their ids and vectors; a prepend still re-embeds everything after it. Scope,
+  title, gloss, occurredAt, and metadata changes never touch chunks. An occurredAt is
+  compared as an instant in the locking read, so the same time written with another
+  offset changes nothing. A job for the new version is queued only
   when some chunk lacks a vector in the serving generation; older-version jobs are
   cancelled at claim (`scripts/checks/smoke-memory-core.ts` commits an update while
   an older version's provider call is in flight on PostgreSQL). Memory Proposal
@@ -394,6 +396,22 @@ whoever owns it.
   that sets either. `tests/server/memory-title-upgrade.test.ts` upgrades a
   revision-14 database with data and runs a revision-14 application's statements
   against it.
+  `0018_memory_occurred_at.sql` (transactional, 5s `lock_timeout`) adds
+  `memories.occurred_at`, when the event or statement a Memory records happened, and
+  its Proposal counterparts (`proposed_occurred_at`/`changes_occurred_at`) with NOT
+  VALID CHECKs (`memories_occurred_at_check` and
+  `memory_proposals_proposed_occurred_at_check` restate the range of
+  `validateMemoryOccurredAt`), rebuilds `memory_proposals_check1` so an
+  occurredAt-only update is a Proposal, and replaces `lore.append_memory_event`
+  (`occurred_at` among `changed_fields`), `lore.protect_memory_proposal_review`
+  (immutability and receipt match), and `lore.portable_core_capabilities()`
+  (`memoryOccurredAt`). It adds a 19-argument `lore.submit_memory_proposal` and keeps
+  the 13- and 17-argument ones. `0019_validate_memory_occurred_at.sql` validates the
+  CHECKs under SHARE UPDATE EXCLUSIVE. Both keep `compatible_from = 9`: an older
+  instance writes no time, keeps it on update, and the review guard refuses its
+  acceptance of a Proposal that sets one. `tests/server/memory-occurred-at-upgrade.test.ts`
+  upgrades a revision-17 database with data and runs a revision-17 application's
+  statements against it.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -401,12 +419,13 @@ whoever owns it.
   `tests/server/schema-drift.test.ts` holds the other frozen restatements to the
   TypeScript that enforces them: every SQL enum, the content/key/path/commit-OID
   CHECK bounds, the title and gloss CHECKs (equal to their validators on every BMP
-  character), and every `lore.portable_core_capabilities()` limit. Capabilities
+  character), the occurredAt CHECKs (equal to their validator at the edges of its
+  range), and every `lore.portable_core_capabilities()` limit. Capabilities
   are served from `DEPLOYMENT_LIMITS` (`src/modules/operations/limits.ts`), which
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 17) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 19) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -425,7 +444,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (17), and
+  `tests/integration/api.test.ts` pin the current revision (19), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -482,6 +501,21 @@ whoever owns it.
   without the dense channel. Lore never generates one and cannot check its language;
   a deployment-side translation would be an opt-in extension, like any automatic
   rewriting;
+- `packages/lore-core/src/memory-input.ts` also owns the occurredAt rule
+  (`validateMemoryOccurredAt`, `MEMORY_OCCURRED_AT_LIMITS`): optional; an RFC 3339
+  date-time with seconds and an offset (`Z` or `±HH:MM`), never a date alone or a
+  time without an offset; its instant must fall in the UTC years 0001 through 9999,
+  so its text always has a four-digit year. `memories_occurred_at_check` and
+  `memory_proposals_proposed_occurred_at_check` restate the range. The engine keeps
+  the UTC instant to the millisecond and returns it at the column's microsecond
+  precision. It is when the event or statement a Memory records happened, as its
+  writer states it: not when Lore recorded the Memory (`createdAt`) or last changed it
+  (`updatedAt`), which for imported history is the import time. Lore never infers it
+  from content; the MCP write tools ask the writing agent for one. It is never chunked
+  or embedded and does not change ranking. Every Memory response carries it: list,
+  detail, search hit, context packet, and archive (`lore-workspace-v4`). The
+  LongMemEval-S evaluation that motivated it is in the reference section "Benchmark
+  and evaluation";
 - `packages/lore-core/src/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,
   non-overlapping, maximum 1,200-code-point chunks that exactly reconstruct the
   canonical Memory while preferring paragraph, Markdown, sentence, line, and
@@ -871,18 +905,22 @@ archive and Graph node timestamps stay millisecond and are not cursors.
   permanent format that golden-value tests pin, one per archive format; it
   deliberately does not share request-replay hashing, which may change at any
   deploy. Change it only with a new archive format. Export writes
-  `lore-workspace-v3`, which orders object keys by UTF-16 code unit, the same in
-  every runtime, as `lore-workspace-v2` does, and gives every Memory a `title` and a
-  `gloss`, null for none; import also accepts v2 and `lore-workspace-v1`, whose checksum orders
-  keys with the default-locale `localeCompare`, and verifies each archive in the
-  format its manifest names (`WORKSPACE_ARCHIVE_FORMATS`, published as the manifest's
-  `format` enum and `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`). A v3 Memory
-  must state both and a v1 or v2 Memory must carry neither
-  (`TITLED_WORKSPACE_ARCHIVE_FORMATS`): Zod would drop an unknown field while the
-  checksum covers it, so an older importer would lose it silently. A release before
-  schema revision 15 refuses a v3 archive, and one before revision 9 also a v2
-  archive, so the target of a Workspace move must be upgraded first
-  (docs/operations.md).
+  `lore-workspace-v4`, which orders object keys by UTF-16 code unit, the same in
+  every runtime, as `lore-workspace-v2` and `lore-workspace-v3` do, and gives every
+  Memory a `title`, a `gloss`, and an `occurredAt`, null for none; import also accepts
+  v3, v2, and `lore-workspace-v1`, whose checksum orders keys with the default-locale
+  `localeCompare`, and verifies each archive in the format its manifest names
+  (`WORKSPACE_ARCHIVE_FORMATS`, published as the manifest's `format` enum and
+  `LORE_CONTRACT.vocabularies.workspaceArchiveFormats`). A v3 or v4 Memory must state
+  its title and gloss and a v1 or v2 Memory must carry neither
+  (`TITLED_WORKSPACE_ARCHIVE_FORMATS`); a v4 Memory must state its occurredAt and an
+  earlier one must not carry it (`TIMED_WORKSPACE_ARCHIVE_FORMATS`): Zod would drop an
+  unknown field while the checksum covers it, so an older importer would lose it
+  silently. A release before schema revision 18 refuses a v4 archive, one before
+  revision 15 also a v3 archive, and one before revision 9 also a v2 archive, so the
+  target of a Workspace move must be upgraded first (docs/operations.md). The
+  per-Memory size allowance (`ARCHIVE_MEMORY_OVERHEAD_BYTES`, 320) covers a v4
+  record's ids, timestamps, occurredAt, version, and property names.
 
 ### Current gaps
 
@@ -1815,7 +1853,14 @@ Benchmark is part of the product quality system even without AutoDream.
     - embeddings, answers, and verdicts from the store and new.
     State reuse only from those lines.
   - **Systems:** `--system memory-search` (default) stores each record as a
-    Memory and asks one search. `--system memory-sources` also stores each
+    Memory, with the record's `occurredAt` when the dataset states one (each
+    LongMemEval-S session's and LoCoMo session's own clock), and asks one search.
+    Each passage carries its Memory's occurredAt, which the reader sees as an
+    `occurred-at` attribute on its `<evidence>` tag, as an agent sees the field in
+    every `lore_search` result. In a 500-question LongMemEval-S comparison on
+    2026-10-22, showing each passage's session time raised answers from 57.0% to
+    60.4% (23 fixed, 6 broken, p = 0.0023; temporal-reasoning 47.2% to 57.5%), because
+    a session's date is written only at the top of its first chunk. `--system memory-sources` also stores each
     source as an Observation the record's Memory cites, and reads those sources
     after the search. It lays them out as the checkout's SDK does: with an
     `attachMemorySources` export, each Memory then its sources; without it (main),

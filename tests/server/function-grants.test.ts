@@ -94,6 +94,8 @@ const GRANT_MAP: Readonly<Record<string, readonly string[]>> = {
     ["lore_app"],
   "lore.submit_memory_proposal(uuid,uuid,text,uuid,memory_proposal_kind,uuid,integer,text,memory_scope,jsonb,boolean,boolean,boolean,text,boolean,text,boolean)":
     ["lore_app"],
+  "lore.submit_memory_proposal(uuid,uuid,text,uuid,memory_proposal_kind,uuid,integer,text,memory_scope,jsonb,boolean,boolean,boolean,text,boolean,text,boolean,timestamp with time zone,boolean)":
+    ["lore_app"],
   "lore.validate_code_dependency_edge_payload()": [],
   "lore.validate_memory_proposal_target()": [],
 };

@@ -164,7 +164,7 @@ test("the outbox names title and gloss among the changed fields, and never their
     return result.rows;
   });
   expect(events.map((event) => [event.event_type, event.changed_fields])).toEqual([
-    ["memory.created", ["content", "metadata", "scope", "title", "gloss"]],
+    ["memory.created", ["content", "metadata", "scope", "title", "gloss", "occurred_at"]],
     ["memory.updated", ["title"]],
     ["memory.updated", ["content", "title"]],
   ]);

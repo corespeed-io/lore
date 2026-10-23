@@ -169,6 +169,17 @@ its own:
   (`name_simple`, `name_english`, `name_relaxed_english`, `name_cjk`) over the title
   and gloss that answer the Memory's first chunk, as `referenceLexicalCandidates`
   specifies. Graph labels read the title, not `metadata.title`.
+- **A Memory has an optional `occurredAt`.** It is a string (RFC 3339 UTC) or null
+  on `Memory`: when the event or statement the Memory records happened, as its
+  writer states it, not when it was stored. `RememberMemory`, `InsertMemoryRecord`,
+  and `UpdateMemory` take it (on update, null removes it and omission keeps it).
+  `validateMemoryOccurredAt` accepts an RFC 3339 date-time with seconds and an
+  offset whose instant falls in the UTC years 0001 through 9999
+  (`MEMORY_OCCURRED_AT_LIMITS`), and returns that instant as UTC, kept to the
+  millisecond. An update compares it as an instant, so another offset for the same
+  time writes nothing. The `memories` table needs a nullable `occurred_at`
+  `timestamptz` column (the schema contract lists it); it is never chunked,
+  embedded, or ranked.
 - **`graph.connect` is an upsert by natural key; `graph.disconnect` deletes by it.**
   A Link is identified by (source, target, kind). `connect` creates it, or replaces
   an existing one's weight and metadata (omitted fields return to their defaults),

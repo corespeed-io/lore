@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import OpenAI from "openai";
 import {
+  type BenchmarkReaderEvidence,
   type BenchmarkReaderProvider,
   createBenchmarkReaderFromEnvironment,
   renderBenchmarkReaderInput,
@@ -48,10 +49,10 @@ export interface BoundReader {
   identity: Record<string, unknown>;
   identityHash: string;
   /** The exact text the reader receives; its hash keys the answer cache. */
-  render(question: string, evidence: Array<{ id: string; text: string }>): string;
+  render(question: string, evidence: BenchmarkReaderEvidence[]): string;
   answer(
     question: string,
-    evidence: Array<{ id: string; text: string }>,
+    evidence: BenchmarkReaderEvidence[],
   ): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null }>;
 }
 

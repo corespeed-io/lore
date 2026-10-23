@@ -66,6 +66,8 @@ export interface RetrievedMemoryContext {
   scope: MemoryScope;
   title: string | null;
   gloss: string | null;
+  /** When the Memory's event happened, as its writer stated it, or null for none. */
+  occurredAt: string | null;
   updatedAt: string;
   score: number;
   rerankScore?: number;
@@ -526,6 +528,7 @@ export function createContextRetrievalModule(
           scope: result.memory.scope,
           title: result.memory.title,
           gloss: result.memory.gloss,
+          occurredAt: result.memory.occurredAt,
           updatedAt: result.memory.updatedAt,
           score: result.score,
           ...(result.rerankScore === undefined ? {} : { rerankScore: result.rerankScore }),

@@ -23,6 +23,7 @@ import {
   validateMemoryMetadata,
   validateMemoryScope,
   validateOptionalMemoryGloss,
+  validateOptionalMemoryOccurredAt,
   validateOptionalMemoryTitle,
 } from "./memory-input";
 import type {
@@ -347,6 +348,7 @@ export function memorySelectColumns(alias?: string): string {
       "metadata",
       "version",
     ].map(column),
+    `${utcTimestampSql(column("occurred_at"))} AS occurred_at`,
     `${utcTimestampSql(column("created_at"))} AS created_at`,
     `${utcTimestampSql(column("updated_at"))} AS updated_at`,
   ].join(", ");
@@ -751,6 +753,7 @@ export function memoryFromRow(row: MemoryRow): Memory {
     scope: row.scope,
     title: row.title,
     gloss: row.gloss,
+    occurredAt: row.occurred_at === null ? null : serializedTimestamp(row.occurred_at),
     content: row.content,
     metadata: row.metadata,
     version: row.version,
@@ -798,6 +801,9 @@ export interface LockedMemory {
   readonly chunks: readonly string[] | null;
   readonly metadata: string | null;
   readonly metadataChanged: boolean;
+  /** The time to write, as UTC, null to remove it, or undefined to keep it. */
+  readonly occurredAt: string | null | undefined;
+  readonly occurredAtChanged: boolean;
   readonly storedChunks: readonly StoredChunkRow[] | null;
 }
 
@@ -889,12 +895,14 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const metadata = input.metadata === undefined ? {} : validateMemoryMetadata(input.metadata);
     const title = input.title === undefined ? null : validateOptionalMemoryTitle(input.title);
     const gloss = input.gloss === undefined ? null : validateOptionalMemoryGloss(input.gloss);
+    const occurredAt =
+      input.occurredAt === undefined ? null : validateOptionalMemoryOccurredAt(input.occurredAt);
     const id = crypto.randomUUID();
     const memoryInsert = statement<MemoryRow>(
       recordingWrite(`INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata, title,
-         gloss
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+         gloss, occurred_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10::timestamptz)
        RETURNING ${memorySelectColumns()}`),
       [
         id,
@@ -906,6 +914,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         JSON.stringify(metadata),
         title,
         gloss,
+        occurredAt,
       ],
     );
     const chunkInsert = chunkInsertStatement(storageScope.partitionId, id, chunks);
@@ -966,18 +975,25 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     if (input.scope !== undefined) validateMemoryScope(input.scope);
     if (input.title !== undefined) validateOptionalMemoryTitle(input.title);
     if (input.gloss !== undefined) validateOptionalMemoryGloss(input.gloss);
+    const occurredAt =
+      input.occurredAt === undefined
+        ? undefined
+        : validateOptionalMemoryOccurredAt(input.occurredAt);
     if (input.metadata !== undefined) validateMemoryMetadata(input.metadata);
     const chunks = input.content === undefined ? null : prepareMemoryContent(input.content).chunks;
     const metadata = input.metadata === undefined ? null : JSON.stringify(input.metadata);
     const [current, stored] = await transaction.batch([
-      statement<MemoryRow & { metadata_changed: boolean }>(
+      statement<MemoryRow & { metadata_changed: boolean; occurred_at_changed: boolean }>(
+        // Instants compare in SQL: another offset for the same time is no change, and a
+        // stored time's microseconds count.
         `SELECT ${memorySelectColumns()},
-                ($3::jsonb IS NOT NULL AND metadata IS DISTINCT FROM $3::jsonb) AS metadata_changed
+                ($3::jsonb IS NOT NULL AND metadata IS DISTINCT FROM $3::jsonb) AS metadata_changed,
+                ($4::boolean AND occurred_at IS DISTINCT FROM $5::timestamptz) AS occurred_at_changed
          FROM memories
          WHERE id = $1
            AND workspace_id = $2
          FOR UPDATE`,
-        [id, storageScope.partitionId, metadata],
+        [id, storageScope.partitionId, metadata, occurredAt !== undefined, occurredAt ?? null],
       ),
       ...(chunks === null
         ? []
@@ -994,13 +1010,19 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     ]);
     const currentRow = current.rows[0];
     if (!currentRow) return null;
-    const { metadata_changed: metadataChanged, ...row } = currentRow;
+    const {
+      metadata_changed: metadataChanged,
+      occurred_at_changed: occurredAtChanged,
+      ...row
+    } = currentRow;
     return {
       row,
       input,
       chunks,
       metadata,
       metadataChanged,
+      occurredAt,
+      occurredAtChanged,
       storedChunks: stored?.rows ?? null,
     };
   }
@@ -1034,15 +1056,16 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
    * Apply the update a Memory was locked for. Throws MemoryVersionConflictError on
    * a stale expected version.
    *
-   * Only what actually differs is written. When content, scope, title, gloss, and
-   * metadata all equal the locked row, nothing is written: the row comes back with its version
-   * and `updatedAt`, no event is recorded, and no job is queued (the final batch
-   * carries only the host's `finish` statements and, with `commit`, COMMIT).
+   * Only what actually differs is written. When content, scope, title, gloss,
+   * occurredAt, and metadata all equal the locked row, nothing is written: the row
+   * comes back with its version and `updatedAt`, no event is recorded, and no job is
+   * queued (the final batch carries only the host's `finish` statements and, with
+   * `commit`, COMMIT). An occurredAt is compared as an instant in the locking read.
    * Content changes replace only the chunks whose ordinals differ, so unchanged
-   * chunks keep their ids and vectors; scope, title, gloss, and metadata changes
-   * leave chunks alone. A job for the new version is queued only when some chunk lacks a
-   * vector in the serving generation; jobs for older versions are cancelled when
-   * claimed.
+   * chunks keep their ids and vectors; scope, title, gloss, occurredAt, and metadata
+   * changes leave chunks alone. A job for the new version is queued only when some
+   * chunk lacks a vector in the serving generation; jobs for older versions are
+   * cancelled when claimed.
    *
    * `versionUnchanged` records a new version even when nothing differs, for a
    * host whose own receipt names the next version (lore's Memory Proposal
@@ -1056,6 +1079,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     options: MemoryUpdateBatchOptions = {},
   ): Promise<{ changed: boolean; chunksChanged: boolean; memory: Memory } | null> {
     const { row: currentMemory, input, chunks, metadata, metadataChanged } = locked;
+    const { occurredAtChanged } = locked;
     const stored = locked.storedChunks;
     const id = currentMemory.id;
     const commit = { commit: options.commit === true };
@@ -1067,7 +1091,12 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
     const titleChanged = input.title !== undefined && input.title !== currentMemory.title;
     const glossChanged = input.gloss !== undefined && input.gloss !== currentMemory.gloss;
     const changed =
-      contentChanged || scopeChanged || titleChanged || glossChanged || metadataChanged;
+      contentChanged ||
+      scopeChanged ||
+      titleChanged ||
+      glossChanged ||
+      occurredAtChanged ||
+      metadataChanged;
     if (!changed && options.versionUnchanged !== true) {
       // Nothing is written: the locked row is what the write left.
       if (options.finish) {
@@ -1087,6 +1116,7 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
              -- A title or gloss may be removed, so whether one changes travels on its own.
              title = CASE WHEN $7::boolean THEN $8::text ELSE title END,
              gloss = CASE WHEN $9::boolean THEN $10::text ELSE gloss END,
+             occurred_at = CASE WHEN $11::boolean THEN $12::timestamptz ELSE occurred_at END,
              version = version + 1,
              updated_at = now()
          WHERE id = $1
@@ -1104,6 +1134,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         titleChanged ? (input.title ?? null) : null,
         glossChanged,
         glossChanged ? (input.gloss ?? null) : null,
+        occurredAtChanged,
+        occurredAtChanged ? (locked.occurredAt ?? null) : null,
       ],
     );
     const tail: PostgresStatement<unknown>[] = [];
@@ -1297,8 +1329,8 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
   /**
    * Insert many Memories with caller-chosen ids in bounded set-based batches, with
    * their chunks and embedding jobs. Every record obeys the same content, scope,
-   * title, gloss, and metadata rules as a single write. Returns each inserted id, in
-   * PostgreSQL's lowercase form, with its version.
+   * title, gloss, occurredAt, and metadata rules as a single write. Returns each
+   * inserted id, in PostgreSQL's lowercase form, with its version.
    */
   async function insertMemoriesInTransaction(
     transaction: PostgresTransaction,
@@ -1317,6 +1349,10 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
         record.gloss === undefined
           ? null
           : validateOptionalMemoryGloss(record.gloss, `records[${index}].gloss`),
+      occurredAt:
+        record.occurredAt === undefined
+          ? null
+          : validateOptionalMemoryOccurredAt(record.occurredAt, `records[${index}].occurredAt`),
       content: record.content,
       metadata: validateMemoryMetadata(record.metadata, `records[${index}].metadata`),
       chunks: batchRecordChunks(record, index),
@@ -1325,19 +1361,21 @@ export function createMemoryMutationPrimitives(options: MemoryMutationPrimitives
       transaction,
       `INSERT INTO memories (
          id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata, title,
-         gloss
+         gloss, occurred_at
        )
        SELECT record.id, $2::uuid, $3::uuid, $4::uuid, record.scope, record.content,
-              record.metadata, record.title, record.gloss
+              record.metadata, record.title, record.gloss, record.occurred_at
        FROM jsonb_to_recordset($1::jsonb) AS record(
-         id uuid, scope memory_scope, content text, metadata jsonb, title text, gloss text
+         id uuid, scope memory_scope, content text, metadata jsonb, title text, gloss text,
+         occurred_at timestamptz
        )
        RETURNING id, version`,
-      prepared.map(({ id, scope, title, gloss, content, metadata }) => ({
+      prepared.map(({ id, scope, title, gloss, occurredAt, content, metadata }) => ({
         id,
         scope,
         title,
         gloss,
+        occurred_at: occurredAt,
         content,
         metadata,
       })),
@@ -1467,6 +1505,7 @@ export function createMemoryModule(
         input.scope === undefined &&
         input.title === undefined &&
         input.gloss === undefined &&
+        input.occurredAt === undefined &&
         input.metadata === undefined
       ) {
         return this.retrieve(id);

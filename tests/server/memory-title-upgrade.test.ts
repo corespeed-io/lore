@@ -8,9 +8,8 @@ import { migrationQueries } from "../../scripts/database/lib/migration-statement
 
 // Revisions 15 to 17 add Memory titles and glosses: 0015 the columns, rules, and
 // functions, 0016 the copy of metadata.title and the rule validation, 0017 the name
-// indexes. These
-// tests upgrade a revision-14 database that holds data, and run what an application
-// of revision 14 sends against the result.
+// indexes. These tests upgrade a revision-14 database that holds data to revision 17,
+// and run what an application of revision 14 sends against the result.
 
 const USER_ID = "10000000-0000-4000-8000-000000000001";
 const WORKSPACE_ID = "20000000-0000-4000-8000-000000000001";
@@ -79,7 +78,7 @@ async function revision14WithData() {
 
 test("0016 copies each valid metadata.title, advances its version, and moves its waiting job", async () => {
   const postgres = await revision14WithData();
-  await applyMigrations(postgres, (number) => number >= 15);
+  await applyMigrations(postgres, (number) => number >= 15 && number <= 17);
 
   expect(
     await rows(postgres, "SELECT schema_revision, compatible_from FROM lore_system_state"),
@@ -174,7 +173,7 @@ test("0016 copies each valid metadata.title, advances its version, and moves its
 
 test("what an application of revision 14 sends still works on revision 17", async () => {
   const postgres = await revision14WithData();
-  await applyMigrations(postgres, (number) => number >= 15);
+  await applyMigrations(postgres, (number) => number >= 15 && number <= 17);
   // Its insert names no title, and its update leaves the title alone.
   await postgres.query(
     `INSERT INTO memories (id, workspace_id, owner_user_id, created_by_agent_id, scope, content, metadata)

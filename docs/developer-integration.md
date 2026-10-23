@@ -129,6 +129,12 @@ await memories.remember({
   gloss: "Roll back (rollback) a failed deploy first, then investigate",
 });
 
+// A Memory of an event says when it happened, not when it was written down.
+await memories.remember({
+  content: "The launch moved to Friday.",
+  occurredAt: "2026-10-20T15:30:00-07:00",
+});
+
 await memories.proposeMemory(
   {
     kind: "update",
@@ -160,6 +166,15 @@ meaning and key terms. Lore does not generate glosses; the writer supplies them.
 titles and glosses through lexical name channels of their own that answer the
 Memory's first chunk, so an English query finds a glossed Memory even when no
 embedding provider is configured.
+
+A Memory's `occurredAt` is optional: when the event or statement it records
+happened, as an RFC 3339 date-time with an offset, such as `2026-10-20T15:30:00-07:00`.
+Lore keeps the UTC instant and returns it with every Memory, search result, and
+context packet. It is not `createdAt`, which is when Lore recorded the Memory; for a
+Memory written days later, or imported from an old conversation, the two differ.
+Lore never infers it from content; the writer supplies it. `updateMemory` with
+`occurredAt: null` removes it. A reader uses it to order events and to tell which of
+two conflicting Memories is newer.
 
 A search can also carry `translations`: the same question in other languages, at
 most `LORE_CONTRACT.limits.memorySearchTranslations` (3). Lore searches each beside
@@ -390,6 +405,8 @@ printf %s "fact" | bun --no-env-file packages/cli/dist/bin.js memory remember --
   --scope private --title "Release fact" --idempotency-key fact-1
 printf %s "发布已批准" | bun --no-env-file packages/cli/dist/bin.js memory remember --stdin \
   --gloss "Release approved" --idempotency-key fact-2
+printf %s "release approved in review" | bun --no-env-file packages/cli/dist/bin.js memory remember \
+  --stdin --occurred-at 2026-10-20T15:30:00-07:00 --idempotency-key fact-3
 printf %s "suggested fact" | bun --no-env-file packages/cli/dist/bin.js memory propose create \
   --stdin --scope private \
   --code-evidence CODE_ARTIFACT_UUID:implements --idempotency-key proposal-1
@@ -422,8 +439,9 @@ configuration/usage failures exit `2`. Credentials are environment-only. Use
 `--stdin` for private query/content so it does not enter shell history or the process
 list; `--metadata JSON` remains an argv convenience and should not carry secrets.
 `--title TEXT` names a Memory or Proposal, and `--gloss TEXT` adds its English gloss;
-on `memory update` and `memory propose update`, `--no-title` and `--no-gloss` remove
-them instead. On `memory search` and `episode search`, repeat `--translation TEXT`
+`--occurred-at TIME` says when a Memory's event happened (RFC 3339 with an offset);
+on `memory update` and `memory propose update`, `--no-title`, `--no-gloss`, and
+`--no-occurred-at` remove them instead. On `memory search` and `episode search`, repeat `--translation TEXT`
 (at most 3) to search the same question in other languages.
 Reuse one `--idempotency-key` when retrying an unknown mutation outcome.
 
@@ -450,10 +468,12 @@ It exposes:
 - `lore_observe` to durably record a bounded, non-canonical Episode;
 - `lore_remember` as a non-destructive mutation tool; it and `lore_update` and
   `lore_propose` tell the agent to send an English `gloss` whenever the content is
-  not in English;
+  not in English, and an `occurredAt` whenever the content records an event, a
+  change, or something said at a known time;
 - `lore_propose` as a non-destructive submission for explicit human review;
 - `lore_update` as destructive because it may replace content, title, gloss,
-  metadata, or visibility (`title: null` or `gloss: null` removes one);
+  occurredAt, metadata, or visibility (`title: null`, `gloss: null`, or
+  `occurredAt: null` removes one);
 - `lore_forget` as an explicitly destructive tool;
 - `lore_link` as a destructive, idempotent Memory Link write by natural key
   (destructive because it replaces an existing Link's weight and metadata), and

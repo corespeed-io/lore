@@ -79,6 +79,16 @@ writing agent or human supplies it; Lore never translates. Like a title, it is
 searched but never chunked, embedded, or shown in place of the content.
 _Avoid_: Translation, summary, alias
 
+**Memory Occurred At**:
+When the event or statement a Memory records happened, as its writer states it: one
+instant, optional, changeable, and removable. It is not when Lore recorded the Memory
+(`createdAt`) or last changed it (`updatedAt`); a Memory written days after a meeting,
+or imported from an old conversation, keeps the time of that meeting or conversation.
+The writing agent or human supplies it; Lore never infers it from content. It is
+returned with every Memory, so a reader can order events and tell which of two
+conflicting Memories is newer, but it is never chunked, embedded, or ranked.
+_Avoid_: Created at, timestamp, valid time, recorded time
+
 **Search Translation**:
 The same search question in another language, which the caller sends beside the
 query. Lore searches each one beside the query and fuses them into one ranking, so a

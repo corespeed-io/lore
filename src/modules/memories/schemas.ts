@@ -9,6 +9,7 @@ import {
   MemoryGlossInputSchema,
   MemoryGlossSchema,
   MemoryMetadataSchema,
+  MemoryOccurredAtInputSchema,
   MemoryScopeSchema,
   MemoryTitleInputSchema,
   MemoryTitleSchema,
@@ -37,6 +38,9 @@ export const MemorySchema = z.object({
   scope: MemoryScopeSchema,
   title: MemoryTitleSchema.nullable(),
   gloss: MemoryGlossSchema.nullable(),
+  // When the event or statement it records happened, as its writer stated it; not
+  // when Lore recorded it (createdAt).
+  occurredAt: z.iso.datetime({ offset: true }).nullable(),
   content: MemoryContentSchema,
   metadata: MemoryMetadataSchema,
   version: z.number().int().positive(),
@@ -51,6 +55,8 @@ export const CreateMemoryInputSchema = z.object({
   title: MemoryTitleInputSchema.optional(),
   // English, when the content is in another language.
   gloss: MemoryGlossInputSchema.optional(),
+  // When the event or statement the content records happened, if the writer knows.
+  occurredAt: MemoryOccurredAtInputSchema.optional(),
   metadata: MemoryMetadataSchema.optional(),
 });
 
@@ -62,6 +68,7 @@ export const UpdateMemoryInputSchema = CreateMemoryInputSchema.partial()
       value.scope !== undefined ||
       value.title !== undefined ||
       value.gloss !== undefined ||
+      value.occurredAt !== undefined ||
       value.metadata !== undefined,
     { message: "At least one Memory field is required" },
   )

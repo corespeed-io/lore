@@ -15,6 +15,11 @@ export interface Memory {
   title: string | null;
   /** An English rendering of content in another language, or null for none. */
   gloss: string | null;
+  /**
+   * When the event or statement this Memory records happened, as its writer states
+   * it (RFC 3339 UTC), or null for none. Not when Lore recorded it: see createdAt.
+   */
+  occurredAt: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;
@@ -29,6 +34,8 @@ export interface RememberMemory {
   title?: string | null;
   /** Omitted or null for none. */
   gloss?: string | null;
+  /** An RFC 3339 date-time with an offset; omitted or null for none. */
+  occurredAt?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -43,6 +50,7 @@ export interface InsertMemoryRecord {
   scope: MemoryScope;
   title?: string | null;
   gloss?: string | null;
+  occurredAt?: string | null;
   content: string;
   metadata: Record<string, unknown>;
   /**
@@ -59,6 +67,8 @@ export interface UpdateMemory {
   title?: string | null;
   /** A new gloss, null to remove it, or omitted to keep it. */
   gloss?: string | null;
+  /** A new time (RFC 3339 with an offset), null to remove it, or omitted to keep it. */
+  occurredAt?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -167,6 +177,7 @@ export interface MemoryRow {
   scope: MemoryScope;
   title: string | null;
   gloss: string | null;
+  occurred_at: string | null;
   content: string;
   metadata: Record<string, unknown>;
   version: number;

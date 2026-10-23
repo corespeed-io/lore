@@ -1139,3 +1139,104 @@ test("Database review transition rejects a receipt whose gloss differs from the 
   });
   await testContext.close();
 });
+
+test("A Proposal carries when its Memory's event happened, as it carries a title", async () => {
+  const { agentActor, testContext } = await createWritingAgent();
+  const memories = createProposalsHarness(testContext.database);
+  const dated = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The vendor call slipped to Tuesday.",
+    occurredAt: "2026-03-02T16:00:00-05:00",
+  });
+  const undated = await memories.propose(agentActor, {
+    kind: "create",
+    content: "The lighthouse lamp is serviced monthly.",
+  });
+  // Stored as the engine stores it: the UTC instant.
+  expect(dated).toMatchObject({ proposedOccurredAt: "2026-03-02T21:00:00.000Z" });
+  expect(undated).toMatchObject({ proposedOccurredAt: null });
+  const memory = (await memories.reviewProposal(testContext.alice, dated.id, "accept"))?.memory;
+  expect(memory).toMatchObject({ occurredAt: "2026-03-02T21:00:00.000000Z", version: 1 });
+  expect(
+    (await memories.reviewProposal(testContext.alice, undated.id, "accept"))?.memory,
+  ).toMatchObject({ occurredAt: null });
+  if (!memory) throw new Error("Expected the accepted Memory");
+
+  // An update that changes only the time is a Proposal; one that changes the content
+  // says nothing of the time, which stays.
+  const moved = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: memory.id,
+    expectedVersion: 1,
+    occurredAt: "2026-03-03T16:00:00Z",
+  });
+  expect(moved).not.toHaveProperty("proposedTitle");
+  expect(moved).toMatchObject({ proposedOccurredAt: "2026-03-03T16:00:00.000Z" });
+  expect(
+    (await memories.reviewProposal(testContext.alice, moved.id, "accept"))?.memory,
+  ).toMatchObject({ version: 2, occurredAt: "2026-03-03T16:00:00.000000Z" });
+  const rewritten = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: memory.id,
+    expectedVersion: 2,
+    content: "The vendor call slipped to Wednesday.",
+  });
+  expect(rewritten).not.toHaveProperty("proposedOccurredAt");
+  expect(
+    (await memories.reviewProposal(testContext.alice, rewritten.id, "accept"))?.memory,
+  ).toMatchObject({ version: 3, occurredAt: "2026-03-03T16:00:00.000000Z" });
+  // Null removes it.
+  const removed = await memories.propose(testContext.alice, {
+    kind: "update",
+    targetMemoryId: memory.id,
+    expectedVersion: 3,
+    occurredAt: null,
+  });
+  expect(removed).toMatchObject({ proposedOccurredAt: null });
+  expect(
+    (await memories.reviewProposal(testContext.alice, removed.id, "accept"))?.memory,
+  ).toMatchObject({ version: 4, occurredAt: null });
+  await expect(
+    memories.propose(testContext.alice, {
+      kind: "update",
+      targetMemoryId: memory.id,
+      expectedVersion: 4,
+      occurredAt: "2026-03-03",
+    }),
+  ).rejects.toMatchObject({ field: "occurredAt" });
+  await testContext.close();
+});
+
+test("Database review transition rejects a receipt whose occurredAt differs from the proposed one", async () => {
+  const testContext = await createMemoryTestContext();
+  const memories = createProposalsHarness(testContext.database);
+  const proposal = await memories.propose(testContext.alice, {
+    kind: "create",
+    content: "Receipt times must match.",
+    occurredAt: "2026-03-02T16:00:00Z",
+  });
+  // A Memory with the proposed content but without its time, as an application that
+  // knows no occurredAt would write on acceptance.
+  await testContext.database.transaction(async (transaction) => {
+    installActorContext(transaction, testContext.alice);
+    const written = await transaction.query<{ id: string }>(
+      `INSERT INTO memories (id, workspace_id, owner_user_id, scope, content, metadata)
+       VALUES (gen_random_uuid(), $1, $2, 'shared', 'Receipt times must match.', '{}')
+       RETURNING id`,
+      [testContext.alice.workspaceId, testContext.alice.userId],
+    );
+    await expect(
+      transaction.query(
+        `UPDATE memory_proposals
+         SET status = 'accepted',
+             reviewed_by_user_id = $2,
+             accepted_memory_id = $3,
+             reviewed_at = now(),
+             expires_at = now() + interval '30 days'
+         WHERE id = $1`,
+        [proposal.id, testContext.alice.userId, written.rows[0]?.id],
+      ),
+    ).rejects.toThrow("Accepted create receipt must match the canonical Memory");
+  });
+  await testContext.close();
+});

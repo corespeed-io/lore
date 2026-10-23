@@ -70,6 +70,7 @@ export const CORE_SCHEMA_CONTRACT = {
           "scope",
           "title",
           "gloss",
+          "occurred_at",
           "content",
           "metadata",
           "version",
@@ -86,6 +87,7 @@ export const CORE_SCHEMA_CONTRACT = {
           "metadata",
           "title",
           "gloss",
+          "occurred_at",
         ],
       },
       memory_chunks: {
