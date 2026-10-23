@@ -513,7 +513,9 @@ whoever owns it.
   (`updatedAt`), which for imported history is the import time. Lore never infers it
   from content; the MCP write tools ask the writing agent for one. It is never chunked
   or embedded and does not change ranking. Every Memory response carries it: list,
-  detail, search hit, context packet, and archive (`lore-workspace-v4`). The
+  detail, search hit, context packet, and archive (`lore-workspace-v4`). A keyed
+  write's replay body stored before revision 18 lacks it, so the Memory service
+  answers it as null (`replayedMemory`). The
   LongMemEval-S evaluation that motivated it is in the reference section "Benchmark
   and evaluation";
 - `packages/lore-core/src/memory-chunking.ts` owns `lore-memory-chunking-v2`: deterministic,

@@ -1,6 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest";
+import { MemorySchema } from "@/modules/memories/schemas";
 import { createMemoryModule } from "@/modules/memories/service";
 import { createApi } from "@/server/api/app";
+import { mutationRequestHash } from "@/server/api/idempotency";
 import { installActorContext } from "@/server/auth/actor-context";
 import { createMemoryTestContext } from "../../support/memory-context";
 
@@ -213,5 +215,72 @@ test("the outbox names occurred_at among the changed fields, and never the time"
     ["memory.updated", ["content", "occurred_at"]],
   ]);
   expect(JSON.stringify(events)).not.toMatch(/2025-10-0[45]/);
+  await context.close();
+});
+
+test("a replay stored before revision 18 answers occurredAt as null, as the contract requires", async () => {
+  const context = await createMemoryTestContext();
+  const memories = createMemoryModule(context.database);
+  const keyed = async (operation: string, key: string, payload: unknown) => ({
+    idempotency: {
+      key,
+      operation,
+      requestHash: await mutationRequestHash({ operation, payload }),
+    },
+  });
+  // Strip the field from each stored body, as an instance of revision 17 stored them.
+  const strip = (key: string) =>
+    context.adminDatabase.transaction((transaction) =>
+      transaction.query(
+        `UPDATE request_idempotency_records
+         SET response_body = response_body #- '{memory,occurredAt}'
+         WHERE idempotency_key = $1`,
+        [key],
+      ),
+    );
+  const createOptions = await keyed("memory.create", "older-create", { content: "A fact." });
+  const created = await memories.remember(context.alice, { content: "A fact." }, createOptions);
+  await strip("older-create");
+  const replayedCreate = await memories.remember(
+    context.alice,
+    { content: "A fact." },
+    createOptions,
+  );
+  expect(replayedCreate).toEqual({ ...created, occurredAt: null });
+  expect(MemorySchema.safeParse(replayedCreate).success).toBe(true);
+
+  const updateOptions = {
+    ...(await keyed("memory.update", "older-update", { scope: "private" })),
+    expectedVersion: 1,
+  };
+  const updated = await memories.update(
+    context.alice,
+    created.id,
+    { scope: "private" },
+    updateOptions,
+  );
+  await strip("older-update");
+  const replayedUpdate = await memories.update(
+    context.alice,
+    created.id,
+    { scope: "private" },
+    updateOptions,
+  );
+  expect(replayedUpdate).toEqual({ ...updated, occurredAt: null });
+  expect(MemorySchema.safeParse(replayedUpdate).success).toBe(true);
+  // A replay that states its time keeps it.
+  const datedOptions = await keyed("memory.create", "dated-create", { content: "Dated." });
+  const dated = await memories.remember(
+    context.alice,
+    { content: "Dated.", occurredAt: "2026-03-02T16:00:00Z" },
+    datedOptions,
+  );
+  await expect(
+    memories.remember(
+      context.alice,
+      { content: "Dated.", occurredAt: "2026-03-02T16:00:00Z" },
+      datedOptions,
+    ),
+  ).resolves.toEqual(dated);
   await context.close();
 });

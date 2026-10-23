@@ -62,6 +62,18 @@ export interface MemoryMutationOptions extends VersionOptions {
   idempotency?: IdempotencyRequest;
 }
 
+/**
+ * A replayed Memory as this release answers it. A body an instance stored before
+ * schema revision 18 states no occurredAt; no Memory had one then, so it is null.
+ */
+function replayedMemory(memory: Memory): Memory;
+function replayedMemory(memory: Memory | null): Memory | null;
+function replayedMemory(memory: Memory | null): Memory | null {
+  // The stored JSON, which may predate the field whatever its type says.
+  const stored: (Omit<Memory, "occurredAt"> & { occurredAt?: string | null }) | null = memory;
+  return stored === null ? null : { ...stored, occurredAt: stored.occurredAt ?? null };
+}
+
 function memoryFromStorage(memory: StoredMemory): Memory {
   const { partitionId, ownerId, sourceId, ...record } = memory;
   return { ...record, workspaceId: partitionId, ownerUserId: ownerId, createdByAgentId: sourceId };
@@ -224,7 +236,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
         return await actorTransaction(database, actor, async (transaction, admitted) => {
           const claim = await beginMutation<{ memory: Memory }>(transaction, options.idempotency);
           const bound = await admitted;
-          if (claim.replay) return claim.replay.memory;
+          if (claim.replay) return replayedMemory(claim.replay.memory);
           // The memories_insert policy enforces write authority; a refusal is
           // SQLSTATE 42501, answered below as MemoryAccessDeniedError. The ledger
           // completion and COMMIT travel with the insert.
@@ -300,7 +312,7 @@ export function createMemoryModule(database: PostgresDatabase, options: MemoryMo
           locking.catch(() => undefined);
           const claim = await claimed;
           const bound = await admitted;
-          if (claim.replay) return claim.replay.memory;
+          if (claim.replay) return replayedMemory(claim.replay.memory);
           const locked = await locking;
           if (!locked) {
             if (keyed) {
