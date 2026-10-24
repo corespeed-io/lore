@@ -19,6 +19,7 @@ import {
   LoreApiError,
   LoreClient,
   type LoreClientOptions,
+  type LoreWorkspaceClient,
   loreConfigurationFromEnvironment,
   MEMORY_CONTENT_LIMITS,
   type Memory,
@@ -43,7 +44,7 @@ import {
   type UpdateMemoryInput,
   type VersionedMutationOptions,
 } from "@corespeed/lore-sdk";
-import { McpServer } from "@modelcontextprotocol/server";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { type StdioServerHandle, serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod/v4";
 import { LORE_MCP_VERSION } from "./generated/version.js";
@@ -1860,4 +1861,69 @@ export function serveLoreMcpStdio(
   const client = new LoreClient({ ...configuration.client, fetch: fetchImplementation });
   const memories = client.workspace(configuration.workspaceId);
   return serveStdio(() => createLoreMcpServer({ memories, code: memories, context: memories }));
+}
+
+export interface LoreMcpHttpOptions {
+  /** The Lore origin that tool calls go to. Defaults to the origin of each MCP request. */
+  baseUrl?: string | URL;
+  /** Required to send the Agent token to a non-loopback plain-HTTP baseUrl. */
+  allowInsecure?: boolean;
+  fetch?: LoreClientOptions["fetch"];
+}
+
+const AGENT_BEARER = /^Bearer (\S+)$/;
+
+/**
+ * A stateless Streamable HTTP endpoint. Each request names its Agent and Workspace
+ * with the same `Authorization` and `x-lore-workspace-id` headers as the Lore API,
+ * so one endpoint serves every Agent, and the tools act as that Agent.
+ */
+export function createLoreMcpHttpHandler(
+  options: LoreMcpHttpOptions = {},
+): (request: Request) => Promise<Response> {
+  return async (request) => {
+    const token = AGENT_BEARER.exec(request.headers.get("authorization") ?? "")?.[1];
+    if (!token) return refusal(401, "authentication_required", "Lore MCP requires an Agent token");
+    const workspaceId = request.headers.get("x-lore-workspace-id");
+    if (!workspaceId) return refusal(400, "invalid_request", "x-lore-workspace-id is required");
+    let client: LoreClient;
+    let memories: LoreWorkspaceClient;
+    try {
+      client = new LoreClient({
+        baseUrl: options.baseUrl ?? new URL(request.url).origin,
+        auth: { type: "agent", token },
+        allowInsecure: options.allowInsecure,
+        fetch: options.fetch,
+      });
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      return refusal(401, "authentication_required", error.message);
+    }
+    try {
+      memories = client.workspace(workspaceId);
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      return refusal(400, "invalid_request", error.message);
+    }
+    // Lore tools send no mid-call notifications, so every exchange is one JSON body.
+    const handler = createMcpHandler(
+      () => createLoreMcpServer({ memories, code: memories, context: memories }),
+      { responseMode: "json" },
+    );
+    try {
+      return await handler.fetch(request);
+    } finally {
+      await handler.close();
+    }
+  };
+}
+
+function refusal(
+  status: 400 | 401,
+  code: "invalid_request" | "authentication_required",
+  message: string,
+): Response {
+  const headers = new Headers({ "cache-control": "private, no-store" });
+  if (status === 401) headers.set("www-authenticate", "Bearer");
+  return Response.json({ code, error: message }, { status, headers });
 }

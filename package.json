@@ -93,6 +93,7 @@
   "dependencies": {
     "@ast-grep/napi": "0.45.3",
     "@corespeed/lore-core": "workspace:*",
+    "@corespeed/lore-mcp": "workspace:*",
     "@corespeed/lore-sdk": "workspace:*",
     "@google/genai": "^2.27.0",
     "@opentelemetry/api": "^1.9.1",

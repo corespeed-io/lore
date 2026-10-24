@@ -17,6 +17,7 @@ import { MethodNotAllowedError, NotFoundError } from "@/server/errors";
 import { loreOpenApiDocument } from "@/server/openapi/document";
 import { securityHeaders } from "@/server/security-headers";
 import { type ApiDependencies, type ApiEnv, createRequestDependencies } from "./dependencies";
+import { mcp } from "./mcp";
 
 /** One routing table for Next.js and workerd. Hosts own database/provider lifetimes. */
 export function createApi(dependencies: ApiDependencies) {
@@ -61,6 +62,7 @@ export function createApi(dependencies: ApiDependencies) {
     .route("/code-evidence", codeEvidence)
     .route("/context", context)
     .route("/episodes", episodes)
+    .route("/mcp", mcp(app))
     .route("/observations", observations)
     .route("/memories", memoryCodeEvidence)
     .route("/memories", memoryObservationEvidence)
