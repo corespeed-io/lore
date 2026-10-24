@@ -47,7 +47,7 @@ import {
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { type StdioServerHandle, serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod/v4";
-import { LORE_MCP_VERSION } from "./generated/version.js";
+import { LORE_MCP_VERSION } from "./generated/version.ts";
 
 export { LORE_MCP_VERSION };
 

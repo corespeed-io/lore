@@ -2,7 +2,7 @@
 
 Lore exposes its stable `/api/v1` contract through the TypeScript SDK and direct
 HTTP access for clients in other languages.
-The frontend, CLI, and external MCP adapter use the TypeScript SDK; deployment
+The frontend, CLI, and MCP adapter use the TypeScript SDK; deployment
 readiness remains the stable `/readyz` probe. These packages do not introduce a
 second authorization model or a tool-shaped
 compatibility API. Each request still resolves an Actor, selects one Workspace, and
@@ -445,15 +445,22 @@ on `memory update` and `memory propose update`, `--no-title`, `--no-gloss`, and
 (at most 3) to search the same question in other languages.
 Reuse one `--idempotency-key` when retrying an unknown mutation outcome.
 
-## External MCP adapter
+## MCP adapter
 
-The adapter uses the official TypeScript MCP server SDK and its stdio compatibility
-helper. It is deliberately external to the Lore application and Portable Core.
-Start it with the shared environment above:
+The adapter uses the official TypeScript MCP server SDK. It stays outside Portable
+Core and reaches Lore only through the TypeScript SDK. It has two transports.
+
+For stdio, start it with the shared environment above:
 
 ```bash
 bun --no-env-file packages/mcp/dist/bin.js
 ```
+
+For Streamable HTTP, connect the MCP host to `POST /api/v1/mcp` on the Lore server.
+Send an Agent token in `Authorization: Bearer lore_agent_…` and the Workspace in
+`x-lore-workspace-id`. The endpoint is stateless and refuses a human credential.
+Each tool call goes through the API in process, with the same authorization and
+RLS as a direct request from that Agent.
 
 It exposes:
 
