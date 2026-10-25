@@ -321,3 +321,54 @@ CREATE FUNCTION lore.lexical_candidates(
   UNION ALL SELECT 'name_relaxed_english', chunk_id, memory_id, candidate_rank FROM name_relaxed_english_lexical
   UNION ALL SELECT 'name_cjk', chunk_id, memory_id, candidate_rank FROM name_cjk_lexical
 $$;
+
+-- The semantic channel, as the engine asks for it: the reference channel over the
+-- partition (referenceSemanticCandidates in ../../src/testing.ts), with no access
+-- policy and no index work.
+CREATE FUNCTION lore.semantic_candidates(
+    target_workspace_id uuid,
+    query_embedding vector,
+    embedding_provider text,
+    embedding_model text,
+    embedding_revision text,
+    embedding_dimensions integer,
+    distance_threshold double precision,
+    scope_filter memory_scope,
+    updated_after timestamptz,
+    updated_before timestamptz,
+    metadata_filter jsonb,
+    excluded_memory_ids uuid[],
+    candidate_limit integer
+) RETURNS TABLE(chunk_id uuid, memory_id uuid, candidate_rank bigint)
+    LANGUAGE sql STABLE
+    AS $$
+  WITH active_semantic_chunks AS MATERIALIZED (
+    SELECT chunk.id, chunk.memory_id, chunk.ordinal,
+      memory.updated_at AS memory_updated_at, embedded.embedding
+    FROM memory_chunks chunk
+    JOIN memories memory ON memory.id = chunk.memory_id
+    JOIN memory_chunk_embeddings embedded ON embedded.chunk_id = chunk.id
+    JOIN embedding_generations generation ON generation.id = embedded.generation_id
+    WHERE chunk.workspace_id = target_workspace_id
+      AND generation.embedding_provider = semantic_candidates.embedding_provider
+      AND generation.embedding_model = semantic_candidates.embedding_model
+      AND generation.embedding_revision = semantic_candidates.embedding_revision
+      AND generation.embedding_dimensions = semantic_candidates.embedding_dimensions
+      AND generation.status IN ('active', 'retiring')
+      AND (scope_filter IS NULL OR memory.scope = scope_filter)
+      AND (updated_after IS NULL OR memory.updated_at >= updated_after)
+      AND (updated_before IS NULL OR memory.updated_at < updated_before)
+      AND (metadata_filter IS NULL OR memory.metadata @> metadata_filter)
+      AND NOT (memory.id = ANY(excluded_memory_ids))
+  )
+  SELECT chunk.id, chunk.memory_id,
+    row_number() OVER (
+      ORDER BY chunk.embedding <=> query_embedding,
+               chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
+    )
+  FROM active_semantic_chunks chunk
+  WHERE (chunk.embedding <=> query_embedding) <= distance_threshold
+  ORDER BY chunk.embedding <=> query_embedding,
+           chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
+  LIMIT candidate_limit
+$$;

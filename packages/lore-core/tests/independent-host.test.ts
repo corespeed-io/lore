@@ -144,6 +144,7 @@ test("an empty database lacks every table, type, function, and enum a group name
         "memory: table memory_chunks",
         "memory: type vector",
         "memory: function lore.lexical_candidates(uuid,text,text[],text[],integer,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
+        "memory: function lore.semantic_candidates(uuid,vector,text,text,text,integer,double precision,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
         "memory: enum memory_scope (shared, private)",
         "graph: table memory_links",
       ]),

@@ -80,7 +80,7 @@ async function revision17WithData() {
 
 test("0018 and 0019 add occurred_at without touching a row, and validate its rules", async () => {
   const postgres = await revision17WithData();
-  await applyMigrations(postgres, (number) => number >= 18);
+  await applyMigrations(postgres, (number) => number >= 18 && number <= 19);
 
   expect(
     await rows(postgres, "SELECT schema_revision, compatible_from FROM lore_system_state"),
@@ -154,7 +154,7 @@ test("0018 and 0019 add occurred_at without touching a row, and validate its rul
 
 test("what an application of revision 17 sends still works on revision 19", async () => {
   const postgres = await revision17WithData();
-  await applyMigrations(postgres, (number) => number >= 18);
+  await applyMigrations(postgres, (number) => number >= 18 && number <= 19);
   await postgres.query(
     "UPDATE memories SET occurred_at = '2026-08-28T09:00:00Z', version = version + 1 WHERE id = $1",
     [MEMORY_ID],

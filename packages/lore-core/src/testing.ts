@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import type { EmbeddingProvider } from "./capabilities";
+import { type EmbeddingProvider, validatedEmbeddingDimensions } from "./capabilities";
 import {
   type ManagedTransactionDriver,
   type MemoryStorageContext,
@@ -18,6 +18,7 @@ import {
   type SchemaContractGroupName,
   type TableContract,
 } from "./schema-contract";
+import { embeddingVectorLiteral } from "./vector";
 
 // The query side of the CJK channel, for hosts that verify their index terms cover it.
 export { cjkLexicalGrams } from "./retrieval/query";
@@ -496,6 +497,143 @@ export async function compareLexicalCandidates(
   });
 }
 
+/** One semantic search, as the engine's search statement asks for it. */
+export interface SemanticCandidateQuery {
+  queryEmbedding: readonly number[];
+  embeddingProvider: { provider: string; model: string; revision: string };
+  embeddingDimensions: number;
+  distanceThreshold: number;
+  candidateLimit: number;
+  scope?: MemoryScope | null;
+  updatedAfter?: string | null;
+  updatedBefore?: string | null;
+  metadataFilter?: Record<string, unknown> | null;
+  excludedMemoryIds?: readonly string[];
+}
+
+export interface SemanticCandidateRow {
+  chunk_id: string;
+  memory_id: string;
+  candidate_rank: number | string;
+}
+
+/** The parameters both statements bind, in the order the engine binds them. */
+function semanticCandidateParameters(partitionId: string, input: SemanticCandidateQuery) {
+  return [
+    partitionId,
+    embeddingVectorLiteral([...input.queryEmbedding], input.embeddingDimensions),
+    input.embeddingProvider.provider,
+    input.embeddingProvider.model,
+    input.embeddingProvider.revision,
+    input.distanceThreshold,
+    input.scope ?? null,
+    input.updatedAfter ?? null,
+    input.updatedBefore ?? null,
+    input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+    [...(input.excludedMemoryIds ?? [])],
+    input.candidateLimit,
+  ];
+}
+
+/** The host's `lore.semantic_candidates`, called with the engine's arguments. */
+export function semanticCandidatesStatement(
+  partitionId: string,
+  input: SemanticCandidateQuery,
+): PostgresStatement<SemanticCandidateRow> {
+  const dimensions = validatedEmbeddingDimensions(input.embeddingDimensions);
+  return statement<SemanticCandidateRow>(
+    `SELECT chunk_id, memory_id, candidate_rank
+     FROM lore.semantic_candidates(
+       $1::uuid, $2::vector(${dimensions}), $3::text, $4::text, $5::text, ${dimensions},
+       $6::double precision, $7::memory_scope, $8::timestamptz, $9::timestamptz, $10::jsonb,
+       $11::uuid[], $12::integer
+     )
+     ORDER BY candidate_rank`,
+    semanticCandidateParameters(partitionId, input),
+  );
+}
+
+/**
+ * The semantic channel as the engine's search statement ran it on the tables
+ * through schema revision 19, which is what `lore.semantic_candidates` must answer:
+ * the same chunks, with the same ranks, for the same caller. Run in a host
+ * transaction, it applies the host's access policy the way that statement did, and
+ * the host's function must apply the same policy itself. It compares every visible
+ * vector of the generation, so it is a specification, never a request path.
+ */
+export function referenceSemanticCandidates(
+  partitionId: string,
+  input: SemanticCandidateQuery,
+): PostgresStatement<SemanticCandidateRow> {
+  const dimensions = validatedEmbeddingDimensions(input.embeddingDimensions);
+  return statement<SemanticCandidateRow>(
+    `WITH active_semantic_chunks AS MATERIALIZED (
+       SELECT chunk.id, chunk.memory_id, chunk.ordinal,
+         memory.updated_at AS memory_updated_at, embedded.embedding
+       FROM memory_chunks chunk
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       JOIN memory_chunk_embeddings embedded
+         ON embedded.workspace_id = chunk.workspace_id
+        AND embedded.memory_id = chunk.memory_id
+        AND embedded.chunk_id = chunk.id
+       JOIN embedding_generations generation ON generation.id = embedded.generation_id
+       WHERE chunk.workspace_id = $1::uuid
+         AND generation.embedding_provider = $3
+         AND generation.embedding_model = $4
+         AND generation.embedding_revision = $5
+         AND generation.embedding_dimensions = ${dimensions}
+         AND generation.status IN ('active', 'retiring')
+         AND ($7::memory_scope IS NULL OR memory.scope = $7::memory_scope)
+         AND ($8::timestamptz IS NULL OR memory.updated_at >= $8::timestamptz)
+         AND ($9::timestamptz IS NULL OR memory.updated_at < $9::timestamptz)
+         AND ($10::jsonb IS NULL OR memory.metadata @> $10::jsonb)
+         AND NOT (memory.id = ANY($11::uuid[]))
+     ),
+     semantic_candidates AS (
+       SELECT chunk.id AS chunk_id, chunk.memory_id,
+         row_number() OVER (
+           ORDER BY chunk.embedding <=> $2::vector(${dimensions}),
+                    chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM active_semantic_chunks chunk
+       WHERE (chunk.embedding <=> $2::vector(${dimensions})) <= $6::double precision
+       ORDER BY chunk.embedding <=> $2::vector(${dimensions}),
+                chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
+       LIMIT $12
+     )
+     SELECT chunk_id, memory_id, candidate_rank FROM semantic_candidates
+     ORDER BY candidate_rank`,
+    semanticCandidateParameters(partitionId, input),
+  );
+}
+
+/**
+ * Run each query through the host's `lore.semantic_candidates` and through the
+ * reference channel, in one transaction of `storage`, and return both answers as
+ * `rank chunk memory` lines. A host passes when every pair is equal.
+ */
+export async function compareSemanticCandidates(
+  storage: MemoryStorageContext,
+  queries: readonly SemanticCandidateQuery[],
+): Promise<{ query: SemanticCandidateQuery; host: string[]; reference: string[] }[]> {
+  const lines = (rows: readonly SemanticCandidateRow[]) =>
+    rows.map((row) => `${Number(row.candidate_rank)} ${row.chunk_id} ${row.memory_id}`);
+  return storage.database.transaction(async (transaction) => {
+    const results = await transaction.batch(
+      queries.flatMap((query) => [
+        semanticCandidatesStatement(storage.partitionId, query),
+        referenceSemanticCandidates(storage.partitionId, query),
+      ]),
+    );
+    return queries.map((query, index) => ({
+      query,
+      host: lines(results[2 * index]?.rows ?? []),
+      reference: lines(results[2 * index + 1]?.rows ?? []),
+    }));
+  });
+}
+
 /**
  * Host-pluggable schema contract kit. A host supplies storage contexts whose
  * transaction wrappers enforce its own authorization policy. The suite checks
@@ -756,6 +894,86 @@ export function runMemoryCoreContractSuite(
         }
       }
       // The comparison means something only when the channels find things.
+      expect(found).toBeGreaterThan(100);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("contract: lore.semantic_candidates answers the reference semantic channel", async () => {
+    const fixture = await createFixture();
+    try {
+      const provider = createDeterministicTestEmbeddingProvider(dimensions);
+      const writer = (storage: MemoryStorageContext) =>
+        createMemoryModule(storage, { ...moduleOptions, embeddingProvider: provider });
+      const writers = {
+        alice: writer(fixture.alice),
+        bob: writer(fixture.bob),
+        carol: writer(fixture.carol),
+      };
+      const long = (lead: string) =>
+        `${lead}\n\n${"Background on the rollout and its retry budget. ".repeat(40)}`;
+      const seeds: [keyof typeof writers, string, MemoryScope, Record<string, unknown>?][] = [
+        ["alice", "Staging deploys run from the prod branch.", "shared", { kind: "decision" }],
+        ["alice", "The staging deploy retry budget is two attempts.", "private"],
+        ["alice", long("Deploy checklist for staging and prod."), "shared"],
+        ["alice", "Tidal navigation charts live in the harbor office.", "shared"],
+        ["bob", "Bob's private note: the staging retry budget is three.", "private"],
+        ["bob", long("Bob's staging runbook."), "private"],
+        ["bob", "Kestrel deploys go through the Omega queue.", "shared", { kind: "decision" }],
+        ["carol", "Another partition stages deploys with the same retry budget.", "shared"],
+      ];
+      const ids: string[] = [];
+      for (const [name, content, scope, metadata] of seeds) {
+        const memory = await writers[name].remember({
+          content,
+          scope,
+          ...(metadata ? { metadata } : {}),
+        });
+        ids.push(memory.id);
+      }
+      const maintenance = createEmbeddingMaintenance(fixture.maintenanceDatabase, {
+        embeddingProviders: [provider],
+      });
+      for (let guard = 0; ; guard += 1) {
+        const result = await maintenance.run();
+        if (result.status === "idle") break;
+        if (result.status === "dead") throw new Error("Embedding job died in contract test");
+        if (guard > 50) throw new Error("Embedding lane did not drain");
+      }
+      const vectors = await provider.embed(
+        ["staging deploy retry budget", "tidal charts", "nothing alike 🧭"],
+        "query",
+      );
+      const queries: SemanticCandidateQuery[] = vectors.flatMap((queryEmbedding) => {
+        const base = {
+          queryEmbedding,
+          embeddingProvider: provider,
+          embeddingDimensions: dimensions,
+          distanceThreshold: 2,
+          candidateLimit: 40,
+        };
+        return [
+          base,
+          { ...base, candidateLimit: 2 },
+          { ...base, distanceThreshold: 0.3 },
+          { ...base, scope: "private" as const },
+          { ...base, metadataFilter: { kind: "decision" } },
+          { ...base, excludedMemoryIds: ids.slice(0, 3) },
+          { ...base, updatedBefore: "2000-01-01T00:00:00Z" },
+          { ...base, embeddingProvider: { ...provider, revision: "another-revision" } },
+        ];
+      });
+      let found = 0;
+      for (const storage of [fixture.alice, fixture.bob, fixture.carol]) {
+        for (const { query, host, reference } of await compareSemanticCandidates(
+          storage,
+          queries,
+        )) {
+          expect(host, JSON.stringify({ ...query, queryEmbedding: undefined })).toEqual(reference);
+          found += reference.length;
+        }
+      }
       expect(found).toBeGreaterThan(100);
     } finally {
       await fixture.close();

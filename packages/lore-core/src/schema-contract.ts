@@ -116,12 +116,14 @@ export const CORE_SCHEMA_CONTRACT = {
         ],
       },
     },
-    // The lexical channels. The host defines the body, applying its own access
-    // policy, and it must answer exactly what referenceLexicalCandidates
-    // (`./testing`) answers through that policy; the generated memory_chunks columns
-    // above are what both read. The engine reads every candidate back itself.
+    // The lexical and semantic channels. The host defines each body, applying its
+    // own access policy, and each must answer exactly what referenceLexicalCandidates
+    // or referenceSemanticCandidates (`./testing`) answers through that policy; the
+    // generated memory_chunks columns above are what the lexical ones read. The
+    // engine reads every candidate back itself.
     functions: [
       "lore.lexical_candidates(uuid,text,text[],text[],integer,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
+      "lore.semantic_candidates(uuid,vector,text,text,text,integer,double precision,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
     ],
     types: ["vector"],
     enums: { memory_scope: MEMORY_SCOPES },
