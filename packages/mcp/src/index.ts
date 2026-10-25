@@ -44,7 +44,12 @@ import {
   type UpdateMemoryInput,
   type VersionedMutationOptions,
 } from "@corespeed/lore-sdk";
-import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import {
+  createMcpHandler,
+  isLegacyRequest,
+  McpServer,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server";
 import { type StdioServerHandle, serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod/v4";
 import { LORE_MCP_VERSION } from "./generated/version.ts";
@@ -1905,17 +1910,31 @@ export function createLoreMcpHttpHandler(
       if (!(error instanceof TypeError)) throw error;
       return refusal(400, "invalid_request", error.message);
     }
-    // Lore tools send no mid-call notifications, so every exchange is one JSON body.
-    const handler = createMcpHandler(
-      () => createLoreMcpServer({ memories, code: memories, context: memories }),
-      { responseMode: "json" },
-    );
+    const server = () => createLoreMcpServer({ memories, code: memories, context: memories });
+    // Answer only after every tool call has finished: a host may release the
+    // request's resources, such as its database connections, once this returns.
+    if (await isLegacyRequest(request)) return serveLegacyAsJson(server(), request);
+    const handler = createMcpHandler(server, { legacy: "reject", responseMode: "json" });
     try {
       return await handler.fetch(request);
     } finally {
       await handler.close();
     }
   };
+}
+
+/** The SDK's stateless legacy fallback streams SSE, which outlives the call. */
+async function serveLegacyAsJson(server: McpServer, request: Request): Promise<Response> {
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  await server.connect(transport);
+  try {
+    return await transport.handleRequest(request);
+  } finally {
+    await server.close();
+  }
 }
 
 function refusal(

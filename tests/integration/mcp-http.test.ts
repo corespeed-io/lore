@@ -1,3 +1,4 @@
+import type { PostgresDatabase } from "@corespeed/lore-core";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterEach, expect, test, vi } from "vitest";
 import { createApi } from "@/server/api/app";
@@ -18,11 +19,7 @@ async function setup() {
   vi.stubEnv("UI_PASSWORD", "test-password");
   const context = await createMemoryTestContext();
   const access = createAccessModule(context.database);
-  const app = createApi({
-    database: () => context.database,
-    memoryOptions: () => ({}),
-    codeRepositories: () => ({}),
-  });
+  const app = requestScopedHost(context.database);
   async function agentFor(actor: ActorContext) {
     const agent = await access.createAgentForWorkspace(actor, {
       name: "MCP over HTTP",
@@ -34,11 +31,40 @@ async function setup() {
   return { context, access, app, agentFor };
 }
 
+type Host = ReturnType<typeof requestScopedHost>;
+
+/**
+ * Like fetchCloudflareApi: each request gets its own API and database handle, and
+ * the handle closes once the response returns, so work that outlives it fails.
+ */
+function requestScopedHost(database: PostgresDatabase) {
+  return {
+    async request(input: string | Request, init?: RequestInit): Promise<Response> {
+      let open = true;
+      const app = createApi({
+        database: (): PostgresDatabase => ({
+          transaction(use, options) {
+            if (!open) throw new Error("The request's database is closed");
+            return database.transaction(use, options);
+          },
+        }),
+        memoryOptions: () => ({}),
+        codeRepositories: () => ({}),
+      });
+      try {
+        return await app.request(input, init);
+      } finally {
+        open = false;
+      }
+    },
+  };
+}
+
 function agentHeaders(token: string, workspaceId: string): Record<string, string> {
   return { authorization: `Bearer ${token}`, "x-lore-workspace-id": workspaceId };
 }
 
-async function connect(app: ReturnType<typeof createApi>, headers: Record<string, string>) {
+async function connect(app: Host, headers: Record<string, string>) {
   const client = new Client({ name: "lore-http-test", version: "1.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(MCP_URL), {
@@ -139,5 +165,43 @@ test("the endpoint refuses a request without a usable Agent credential before MC
       code: "authentication_required",
       error: "Lore MCP requires an Agent token",
     });
+  });
+});
+
+test("a 2025-era tool call answers in JSON once the tool has finished", async () => {
+  await withContext(async ({ app, agentFor, context }) => {
+    const { headers } = await agentFor(context.alice);
+    const response = await app.request(MCP_URL, {
+      method: "POST",
+      headers: {
+        ...headers,
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-06-18",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: {
+          name: "lore_remember",
+          arguments: { content: "Legacy clients get a whole answer." },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const answer = (await response.json()) as {
+      id: number;
+      result: { isError?: boolean; structuredContent: { memory: { id: string } } };
+    };
+    expect(answer.id).toBe(7);
+    expect(answer.result.isError).toBeFalsy();
+    const stored = await app.request(
+      `/api/v1/memories/${answer.result.structuredContent.memory.id}`,
+      { headers },
+    );
+    expect(stored.status).toBe(200);
   });
 });

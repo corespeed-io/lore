@@ -765,7 +765,10 @@ whoever owns it.
   Workspace gets the API's own 403. Its tools then call the API in process through
   the SDK (`createLoreMcpHttpHandler` with the app's `fetch`), so every tool call
   passes admission, Actor resolution, and RLS as an ordinary request. It is not in
-  OpenAPI, and it has no sessions: GET and DELETE answer 405.
+  OpenAPI, and it has no sessions: GET and DELETE answer 405. It answers every
+  exchange in JSON, never SSE, so the response returns only after each tool call
+  ends: Workers close the request's database when the handler returns. The SDK's
+  legacy fallback streams SSE, so 2025-era requests go to a JSON-mode transport.
   `lore_link`/`lore_unlink` write and delete Memory Links by natural key, and
   `lore_links` lists one Memory's Links.
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
