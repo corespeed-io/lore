@@ -4,7 +4,10 @@
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node"],
-    "rewriteRelativeImportExtensions": true
+    "rewriteRelativeImportExtensions": true,
+    // The Lore server bundles this source, so Bun and Wrangler must find the SDK
+    // without a built dist. tsconfig.build.json builds against the built SDK.
+    "paths": { "@corespeed/lore-sdk": ["../typescript-sdk/src/index.ts"] }
   },
   "include": ["src/**/*.ts"]
 }

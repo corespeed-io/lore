@@ -22,7 +22,7 @@
     }
   },
   "scripts": {
-    "build": "bun --no-env-file -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && bun --no-env-file --bun tsc -p tsconfig.json && chmod +x dist/bin.js",
+    "build": "bun --no-env-file -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && bun --no-env-file --bun tsc -p tsconfig.build.json && chmod +x dist/bin.js",
     "prepack": "bun --no-env-file run --cwd ../.. sdk:check && bun --no-env-file run --cwd ../typescript-sdk build && bun --no-env-file run build"
   },
   "dependencies": {
