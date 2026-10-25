@@ -1887,6 +1887,13 @@ export function createLoreMcpHttpHandler(
   options: LoreMcpHttpOptions = {},
 ): (request: Request) => Promise<Response> {
   return async (request) => {
+    if (request.method !== "POST") {
+      // Stateless: there is no session stream to open (GET) or end (DELETE).
+      return Response.json(
+        { code: "method_not_allowed", error: "Method not allowed" },
+        { status: 405, headers: { allow: "POST", "cache-control": "private, no-store" } },
+      );
+    }
     const token = AGENT_BEARER.exec(request.headers.get("authorization") ?? "")?.[1];
     if (!token) return refusal(401, "authentication_required", "Lore MCP requires an Agent token");
     const workspaceId = request.headers.get("x-lore-workspace-id");

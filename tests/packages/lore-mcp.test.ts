@@ -3,7 +3,7 @@ import type {
   LoreMcpContextClient,
   LoreMcpMemoryClient,
 } from "@corespeed/lore-mcp";
-import { createLoreMcpServer } from "@corespeed/lore-mcp";
+import { createLoreMcpHttpHandler, createLoreMcpServer } from "@corespeed/lore-mcp";
 import type {
   CodeArtifact,
   CodeDependencyEdge,
@@ -1775,4 +1775,21 @@ describe("Lore external MCP adapter", () => {
     expect(JSON.stringify(result.content)).toContain("metadata exceeds 100000 characters");
     expect(memories.remember).not.toHaveBeenCalled();
   });
+});
+
+test("the HTTP handler is stateless and refuses session methods", async () => {
+  const handle = createLoreMcpHttpHandler({ fetch: () => Promise.reject(new Error("no call")) });
+  for (const method of ["GET", "DELETE"]) {
+    const response = await handle(
+      new Request("https://lore.example/api/v1/mcp", {
+        method,
+        headers: {
+          authorization: `Bearer lore_agent_${"0".repeat(64)}`,
+          "x-lore-workspace-id": WORKSPACE_ID,
+        },
+      }),
+    );
+    expect(response.status, method).toBe(405);
+    expect(response.headers.get("allow")).toBe("POST");
+  }
 });
