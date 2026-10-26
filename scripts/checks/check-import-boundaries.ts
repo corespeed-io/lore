@@ -30,7 +30,8 @@ const ALLOWED_LAYERS: Record<Layer, readonly Layer[]> = {
   mcp: ["mcp", "sdk"],
   "server-infra": ["server-infra", "core"],
   "module-server": ["module-server", "server-infra", "core"],
-  "server-composition": ["server-composition", "module-server", "server-infra", "core"],
+  // The API serves Streamable HTTP MCP, whose tools call it back through the SDK.
+  "server-composition": ["server-composition", "module-server", "server-infra", "core", "mcp"],
   "ui-infra": ["ui-infra", "sdk"],
   "module-ui": ["module-ui", "ui-infra", "sdk"],
   "ui-composition": ["ui-composition", "module-ui", "ui-infra", "sdk"],
@@ -159,6 +160,7 @@ function forbiddenInWorker(name: string): boolean {
 const SERVER_COMPOSITION_FILES = new Set([
   "src/server/api/app.ts",
   "src/server/api/cloudflare.ts",
+  "src/server/api/mcp.ts",
   "src/server/api/next.ts",
   "src/server/openapi/document.ts",
   "src/instrumentation.ts",

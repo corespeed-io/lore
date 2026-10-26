@@ -754,10 +754,21 @@ whoever owns it.
   surface;
 - The API route handlers and canonical OpenAPI document define one public API contract.
   `packages/typescript-sdk` generates its public types from that document and owns
-  the integration client used by the frontend. `packages/cli` and the external
-  stdio `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
+  the integration client used by the frontend. `packages/cli` and the
+  `packages/mcp` adapter delegate API paths, Actor authentication, Workspace
   scoping, cursors, ETags, idempotency, bounded reads, and errors to that SDK. Keep
   MCP outside Portable Core and never accept a model-supplied Workspace override.
+  MCP runs over stdio (`lore-mcp`, one configured Actor and Workspace) or over
+  stateless Streamable HTTP at `POST /api/v1/mcp`. The HTTP endpoint takes an Agent
+  token and `x-lore-workspace-id`, the same headers as the API, and refuses a human
+  credential. `src/server/api/mcp.ts` resolves the Actor first, so a bad token or
+  Workspace gets the API's own 403. Its tools then call the API in process through
+  the SDK (`createLoreMcpHttpHandler` with the app's `fetch`), so every tool call
+  passes admission, Actor resolution, and RLS as an ordinary request. It is not in
+  OpenAPI, and it has no sessions: GET and DELETE answer 405. It answers every
+  exchange in JSON, never SSE, so the response returns only after each tool call
+  ends: Workers close the request's database when the handler returns. The SDK's
+  legacy fallback streams SSE, so 2025-era requests go to a JSON-mode transport.
   `lore_link`/`lore_unlink` write and delete Memory Links by natural key, and
   `lore_links` lists one Memory's Links.
   `lore_code_search`, `lore_retrieve_context`, and `lore_code_dependencies` fit
@@ -955,7 +966,7 @@ receipts, and deployment readiness/capabilities are available in `/operations`.
   and `packages/` in one layer (Core; SDK/CLI/MCP; server infrastructure; domain
   modules, split into server and `browser/`; server and UI composition; Next
   pages), lets a layer import only the layers below it (type-only imports
-  included), and holds cross-domain imports to its declared acyclic `MODULES`
+  included; server composition may import MCP, to serve it over HTTP), and holds cross-domain imports to its declared acyclic `MODULES`
   graph: a module imports another only when it declares that dependency, and only
   the files that module exports. Nothing the Cloudflare Worker bundle reaches may
   import a native or Bun-only package: the check walks from the wrangler `main`
