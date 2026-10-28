@@ -678,6 +678,14 @@ takes while being validated. From the moment it commits, a revision-20 instance
 answers the semantic channel of Memory search through it, with the same candidates
 as before; older instances never call it.
 
+`0021` keeps `compatible_from` at 9. It is transactional under the 5-second
+`lock_timeout` and rewrites ten read policies (Episodes and their evidence, Memory
+events, import provenance, Code and Observation evidence, and Proposals with their
+evidence) so the Workspace check runs once per statement. Each `ALTER POLICY` takes
+ACCESS EXCLUSIVE on its table for a catalog change only; if a long transaction holds
+one of them, the timeout expires, nothing is recorded, and a rerun repeats the file.
+Every Actor sees exactly the rows it saw before.
+
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a
 revision-9 worker embeds whatever chunks a claim returns and writes each by chunk

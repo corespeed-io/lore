@@ -416,6 +416,20 @@ whoever owns it.
   function (EXECUTE: `lore_app` only, `search_path` pinned) that runs the semantic
   channel with the `memories_select` predicate and returns chunk ids and ranks only.
   It keeps `compatible_from = 9`: an older instance never names it.
+  `0021_once_per_statement_read_checks.sql` (transactional, 5s `lock_timeout`)
+  gives the read policies 0004 left alone the same form: `episodes`,
+  `episode_evidence_chunks`, `episode_evidence_chunk_embeddings`, `memory_events`,
+  `memory_import_provenance`, `memory_code_evidence`, `memory_observation_evidence`,
+  `memory_proposals`, `memory_proposal_evidence`, and
+  `memory_proposal_code_evidence` now check the Workspace once per statement and
+  compare only the Workspace, owner, and scope for each row (Proposals: the owner,
+  and a human Actor's Membership once per statement). Visibility is unchanged:
+  `tests/server/read-policy-equivalence.test.ts` compares each policy with its old
+  expression for Users, Agents, revoked access, and rows with missing, private,
+  expired, or other-Workspace parents, and refuses a per-row membership call in
+  those policies. A new read policy uses this form too. On 20k evidence chunks it
+  made Episode evidence search about 2.2 times faster (hybrid 2.3 s to 1.0 s). It
+  keeps `compatible_from = 9`: every Actor sees the same rows.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -429,7 +443,7 @@ whoever owns it.
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 20) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 21) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -448,7 +462,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (20), and
+  `tests/integration/api.test.ts` pin the current revision (21), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -2031,8 +2045,9 @@ not a persisted Memory Affinity model and not an Evaluation Suite.
 
 ### Search latency dataset
 
-`bun run benchmark:search-latency` times Memory search (lexical and hybrid) as
-`lore_app` under RLS and, with `BENCHMARK_EXPLAIN=1`, prints each plan; with
+`bun run benchmark:search-latency` times Memory search and Episode evidence search
+(lexical and hybrid) as `lore_app` under RLS and, with `BENCHMARK_EXPLAIN=1`, prints
+each Memory search plan; with
 `BENCHMARK_VERIFY=1` it also checks `lore.semantic_candidates` against
 `referenceSemanticCandidates`. Seed a migrated disposable `bench` database first with
 `tools/evaluation/database/search-latency-corpus.sql` (its header gives the command).

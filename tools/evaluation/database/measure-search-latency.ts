@@ -12,6 +12,7 @@ import {
   type EmbeddingProvider,
   type PostgresTransaction,
 } from "@corespeed/lore-core";
+import { createEpisodeEvidenceModule } from "@corespeed/lore-core/episodes";
 import {
   compareSemanticCandidates,
   type SemanticCandidateQuery,
@@ -151,6 +152,37 @@ for (const query of queries) {
         console.log(`\n=== ${query.name} (hybrid) plan ===\n${plan}`);
       }
     }
+  }
+}
+
+// Episode evidence search, when the corpus has Episodes.
+const evidence = {
+  lexical: createEpisodeEvidenceModule(storage, { embeddingDimensions: dimensions }),
+  hybrid: createEpisodeEvidenceModule(storage, {
+    embeddingDimensions: dimensions,
+    embeddingProvider,
+  }),
+};
+for (const query of [
+  { name: "evidence: observation words", text: "observation 7" },
+  { name: "evidence: no match", text: "nothing matches this" },
+]) {
+  for (const mode of ["lexical", "hybrid"] as const) {
+    const timings: number[] = [];
+    let results = 0;
+    for (let run = 0; run < runs + 1; run += 1) {
+      const started = performance.now();
+      const found = await evidence[mode].search({ query: query.text, limit: 10 });
+      if (run > 0) timings.push(performance.now() - started);
+      results = found.length;
+    }
+    report.push({
+      query: query.name,
+      mode,
+      results: String(results),
+      p50: percentile(timings, 0.5).toFixed(1),
+      max: Math.max(...timings).toFixed(1),
+    });
   }
 }
 
