@@ -1,6 +1,6 @@
 # `@corespeed/lore-mcp`
 
-External stdio Model Context Protocol adapter for Lore. It exposes bounded Memory
+Model Context Protocol adapter for Lore, over stdio or Streamable HTTP. It exposes bounded Memory
 read and write tools, durable non-canonical `lore_observe` Episode recording,
 `lore_index_evidence` to index one Episode, separate read-only
 `lore_search_evidence` for original Observation excerpts, read-only
@@ -30,6 +30,19 @@ authorization state.
 Requires Bun 1.4.2 or newer. Install with `bun add --global @corespeed/lore-mcp`
 and configure the MCP host to run `lore-mcp` with explicit environment variables.
 The executable disables automatic `.env` loading.
+
+A Lore server also serves the same tools over stateless Streamable HTTP at
+`POST /api/v1/mcp`, with no local process. Send an Agent token and the Workspace
+with the same headers as the API:
+
+```sh
+claude mcp add --transport http lore https://lore.example.com/api/v1/mcp \
+  --header "Authorization: Bearer lore_agent_…" \
+  --header "x-lore-workspace-id: <workspace-uuid>"
+```
+
+The endpoint refuses a human credential, because the tools act only as an Agent.
+Another HTTP host can serve the tools with `createLoreMcpHttpHandler`.
 
 `lore_retrieve_context` is the read-only orchestration surface for answering with
 both stores. It routes the question, retrieves only Actor-visible Memory evidence,

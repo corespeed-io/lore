@@ -16,7 +16,7 @@ Clients in other languages can call the HTTP API described by OpenAPI.
 | Web UI | `src/shell/`, `src/modules/*/browser/`, and `src/shared/browser/` | Views, presentation, navigation, and SDK-backed remote state |
 | TypeScript SDK | `packages/typescript-sdk/` | Generated wire types, public content limits, and API client transport |
 | CLI | `packages/cli/` | Command parsing and output through the TypeScript SDK |
-| MCP | `packages/mcp/` | External stdio tools through the TypeScript SDK |
+| MCP | `packages/mcp/` | MCP tools through the TypeScript SDK, over stdio or Streamable HTTP |
 | OSS API | `src/server/api/`, domain routes/services, and `src/server/` | Authentication, tenancy, authorization, request replay, and engine composition |
 | Core | `packages/lore-core/` | Memory algorithms and PostgreSQL storage mechanics (a boundary, not a published artifact — see below) |
 
@@ -160,8 +160,10 @@ stays tight in both directions: a declared dependency or export that nothing use
 also fails the check.
 
 API route handlers and the canonical OpenAPI document define the API contract consumed
-by the TypeScript SDK and direct HTTP clients. The CLI and external MCP adapter
-delegate to the TypeScript SDK. The frontend follows `component → domain browser/data.ts
+by the TypeScript SDK and direct HTTP clients. The CLI and the MCP adapter
+delegate to the TypeScript SDK. The API also serves the MCP tools over Streamable
+HTTP at `POST /api/v1/mcp` (`src/server/api/mcp.ts`); there the SDK calls the API
+in process, so each tool call is admitted and authorized as an ordinary request. The frontend follows `component → domain browser/data.ts
 → TypeScript SDK`: SWR owns remote state and cache invalidation, while that file's
 plain functions preserve UI defaults and adapt results to their views. A domain
 whose calls only forward to the SDK does not get an extra adapter file for it.
