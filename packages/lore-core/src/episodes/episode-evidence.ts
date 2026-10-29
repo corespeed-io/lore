@@ -355,143 +355,34 @@ async function searchOneQuery(input: {
   embeddingDimensions: number;
 }): Promise<EpisodeEvidenceSearchResult[]> {
   const result = await input.transaction.query<SearchRow>(
-    `WITH simple_lexical_candidates AS (
-       SELECT
-         chunk.id AS chunk_id,
-         chunk.episode_id,
-         chunk.observation_id,
-         row_number() OVER (
-           ORDER BY ts_rank_cd(chunk.search_vector, websearch_to_tsquery('simple', $1), 32) DESC,
-                    observation.observed_at DESC, chunk.observation_ordinal DESC,
-                    chunk.chunk_ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM episode_evidence_chunks chunk
-       JOIN observations observation
-         ON observation.id = chunk.observation_id
-        AND observation.workspace_id = chunk.workspace_id
-       JOIN episodes episode
-         ON episode.id = chunk.episode_id
-        AND episode.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = $2
-         AND chunk.index_revision = $11
-         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
-         AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
-         AND (
-           $10::text IS NULL
-           OR cardinality($12::text[]) = 0
-           OR observation.metadata->>$10 = ANY($12::text[])
-         )
-         AND chunk.search_vector @@ websearch_to_tsquery('simple', $1)
-       ORDER BY ts_rank_cd(chunk.search_vector, websearch_to_tsquery('simple', $1), 32) DESC,
-                observation.observed_at DESC, chunk.observation_ordinal DESC,
-                chunk.chunk_ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     english_lexical_candidates AS (
-       SELECT
-         chunk.id AS chunk_id,
-         chunk.episode_id,
-         chunk.observation_id,
-         row_number() OVER (
-           ORDER BY ts_rank_cd(chunk.search_vector_english, websearch_to_tsquery('english', $1), 32) DESC,
-                    observation.observed_at DESC, chunk.observation_ordinal DESC,
-                    chunk.chunk_ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM episode_evidence_chunks chunk
-       JOIN observations observation
-         ON observation.id = chunk.observation_id
-        AND observation.workspace_id = chunk.workspace_id
-       JOIN episodes episode
-         ON episode.id = chunk.episode_id
-        AND episode.workspace_id = chunk.workspace_id
-       WHERE chunk.workspace_id = $2
-         AND chunk.index_revision = $11
-         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
-         AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
-         AND (
-           $10::text IS NULL
-           OR cardinality($12::text[]) = 0
-           OR observation.metadata->>$10 = ANY($12::text[])
-         )
-         AND chunk.search_vector_english @@ websearch_to_tsquery('english', $1)
-       ORDER BY ts_rank_cd(chunk.search_vector_english, websearch_to_tsquery('english', $1), 32) DESC,
-                observation.observed_at DESC, chunk.observation_ordinal DESC,
-                chunk.chunk_ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     cjk_lexical_candidates AS (
-       SELECT chunk.id AS chunk_id, chunk.episode_id, chunk.observation_id,
-         row_number() OVER (ORDER BY matches.count DESC, observation.observed_at DESC,
-           chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id) AS candidate_rank
-       FROM episode_evidence_chunks chunk
-       JOIN observations observation ON observation.id = chunk.observation_id
-         AND observation.workspace_id = chunk.workspace_id
-       JOIN episodes episode ON episode.id = chunk.episode_id
-         AND episode.workspace_id = chunk.workspace_id
-       CROSS JOIN LATERAL (
-         SELECT count(*) AS count FROM unnest($15::text[]) gram
-         WHERE strpos(normalize(chunk.content, NFC), gram) > 0
-       ) matches
-       WHERE chunk.workspace_id = $2 AND chunk.index_revision = $11
-         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
-         AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
-         AND ($10::text IS NULL OR cardinality($12::text[]) = 0
-           OR observation.metadata->>$10 = ANY($12::text[]))
-         AND matches.count > 0
-       ORDER BY matches.count DESC, observation.observed_at DESC,
-         chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
-       LIMIT $4
-     ),
-     active_semantic_chunks AS MATERIALIZED (
-       SELECT
-         chunk.id,
-         chunk.episode_id,
-         chunk.observation_id,
-         chunk.observation_ordinal,
-         chunk.chunk_ordinal,
-         observation.observed_at,
-         embedded.embedding
-       FROM episode_evidence_chunks chunk
-       JOIN observations observation
-         ON observation.id = chunk.observation_id
-        AND observation.workspace_id = chunk.workspace_id
-       JOIN episodes episode
-         ON episode.id = chunk.episode_id
-        AND episode.workspace_id = chunk.workspace_id
-       JOIN episode_evidence_chunk_embeddings embedded
-         ON embedded.chunk_id = chunk.id
-        AND embedded.workspace_id = chunk.workspace_id
-       JOIN embedding_generations generation ON generation.id = embedded.generation_id
-       WHERE $3::text IS NOT NULL
-         AND chunk.workspace_id = $2
-         AND chunk.index_revision = $11
-         AND ($16::text IS NULL OR episode.scope = $16::memory_scope)
-         AND generation.embedding_provider = $6
-         AND generation.embedding_model = $7
-         AND generation.embedding_revision = $8
-         AND generation.embedding_dimensions = ${input.embeddingDimensions}
-         AND generation.status IN ('active', 'retiring')
-         AND ($9::jsonb IS NULL OR observation.metadata @> $9::jsonb)
-         AND (
-           $10::text IS NULL
-           OR cardinality($12::text[]) = 0
-           OR observation.metadata->>$10 = ANY($12::text[])
-         )
-     ),
-     semantic_candidates AS (
-       SELECT
-         chunk.id AS chunk_id,
-         chunk.episode_id,
-         chunk.observation_id,
-         row_number() OVER (
-           ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}), chunk.observed_at DESC,
-                    chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM active_semantic_chunks chunk
-       WHERE (chunk.embedding <=> $3::vector(${input.embeddingDimensions})) <= $5
-       ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}), chunk.observed_at DESC,
-                chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
-       LIMIT $4
+    `WITH candidates AS (
+       -- The channels run in the host's lore.episode_evidence_candidates, which
+       -- answers chunk ids and per-channel ranks only. Every candidate is read back
+       -- here, through the caller's own access policy, before it is fused.
+       SELECT candidate.chunk_id, candidate.episode_id, candidate.observation_id,
+         candidate.candidate_rank
+       FROM lore.episode_evidence_candidates(
+         $2::uuid,
+         $1::text,
+         $15::text[],
+         $3::vector(${input.embeddingDimensions}),
+         $6::text,
+         $7::text,
+         $8::text,
+         ${input.embeddingDimensions},
+         $5::double precision,
+         $11::text,
+         $16::memory_scope,
+         $9::jsonb,
+         $10::text,
+         $12::text[],
+         $4::integer
+       ) candidate
+       JOIN episode_evidence_chunks chunk
+         ON chunk.workspace_id = $2
+        AND chunk.id = candidate.chunk_id
+        AND chunk.episode_id = candidate.episode_id
+        AND chunk.observation_id = candidate.observation_id
      ),
      reciprocal_rank AS (
        SELECT
@@ -499,15 +390,7 @@ async function searchOneQuery(input: {
          episode_id,
          observation_id,
          sum(1.0 / (60.0 + candidate_rank)) AS score
-       FROM (
-         SELECT * FROM simple_lexical_candidates
-         UNION ALL
-         SELECT * FROM english_lexical_candidates
-         UNION ALL
-         SELECT * FROM cjk_lexical_candidates
-         UNION ALL
-         SELECT * FROM semantic_candidates
-       ) candidates
+       FROM candidates
        GROUP BY chunk_id, episode_id, observation_id
      ),
      ranked_observations AS (

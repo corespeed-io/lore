@@ -116,12 +116,14 @@ export const CORE_SCHEMA_CONTRACT = {
         ],
       },
     },
-    // The lexical channels. The host defines the body, applying its own access
-    // policy, and it must answer exactly what referenceLexicalCandidates
-    // (`./testing`) answers through that policy; the generated memory_chunks columns
-    // above are what both read. The engine reads every candidate back itself.
+    // The lexical and semantic channels. The host defines each body, applying its
+    // own access policy, and each must answer exactly what referenceLexicalCandidates
+    // or referenceSemanticCandidates (`./testing`) answers through that policy; the
+    // generated memory_chunks columns above are what the lexical ones read. The
+    // engine reads every candidate back itself.
     functions: [
       "lore.lexical_candidates(uuid,text,text[],text[],integer,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
+      "lore.semantic_candidates(uuid,vector,text,text,text,integer,double precision,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
     ],
     types: ["vector"],
     enums: { memory_scope: MEMORY_SCOPES },
@@ -319,7 +321,13 @@ export const CORE_SCHEMA_CONTRACT = {
       },
       embedding_generations: EMBEDDING_GENERATIONS,
     },
-    functions: ["lore.ensure_embedding_generation(text,text,integer,text)"],
+    // The search channels. The host defines the body, applying its own access
+    // policy, and it must answer exactly what referenceEpisodeEvidenceCandidates
+    // (`./testing`) answers through that policy. The engine reads every candidate back.
+    functions: [
+      "lore.ensure_embedding_generation(text,text,integer,text)",
+      "lore.episode_evidence_candidates(uuid,text,text[],vector,text,text,text,integer,double precision,text,memory_scope,jsonb,text,text[],integer)",
+    ],
     types: ["vector"],
     enums: { episode_kind: EPISODE_KINDS, observation_kind: OBSERVATION_KINDS },
     values: { "embedding_generations.status": ["active", "retiring"] },

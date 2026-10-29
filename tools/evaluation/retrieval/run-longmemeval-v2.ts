@@ -401,7 +401,7 @@ try {
   const schema = await admin.query<{ chunks: string | null; search_index: string | null }>(
     `SELECT
        to_regclass('public.episode_evidence_chunks')::text AS chunks,
-       to_regclass('public.episode_evidence_chunks_search_idx')::text AS search_index`,
+       to_regclass('public.episode_evidence_chunks_workspace_search_idx')::text AS search_index`,
   );
   if (!schema.rows[0]?.chunks || !schema.rows[0]?.search_index) {
     throw new Error("Lore v1 baseline with the Episode evidence index is required");

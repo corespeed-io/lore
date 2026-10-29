@@ -672,6 +672,29 @@ when it updates a Memory, and cannot accept a Proposal that sets one: the review
 guard refuses the receipt rather than let it be lost, for as long as the rolling
 deploy lasts.
 
+`0020` keeps `compatible_from` at 9. It is transactional and only creates
+`lore.semantic_candidates`, so it locks no table beyond the ACCESS SHARE its body
+takes while being validated. From the moment it commits, a revision-20 instance
+answers the semantic channel of Memory search through it, with the same candidates
+as before; older instances never call it.
+
+`0021` keeps `compatible_from` at 9. It is transactional under the 5-second
+`lock_timeout` and rewrites ten read policies (Episodes and their evidence, Memory
+events, import provenance, Code and Observation evidence, and Proposals with their
+evidence) so the Workspace check runs once per statement. Each `ALTER POLICY` takes
+ACCESS EXCLUSIVE on its table for a catalog change only; if a long transaction holds
+one of them, the timeout expires, nothing is recorded, and a rerun repeats the file.
+Every Actor sees exactly the rows it saw before.
+
+`0022` and `0023` keep `compatible_from` at 9. `0022` is transactional and only
+creates `lore.episode_evidence_candidates`; from the moment it commits, a
+revision-23 instance answers Episode evidence search through it, with the same
+candidates as before, by scanning until `0023`'s concurrent builds commit. `0023`
+builds three Workspace-leading GIN indexes on `episode_evidence_chunks` and drops
+the two baseline GINs, which no request could use. The CJK index computes the grams
+of every evidence chunk once during its build (CPU, not locks) and on each insert
+afterwards.
+
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a
 revision-9 worker embeds whatever chunks a claim returns and writes each by chunk

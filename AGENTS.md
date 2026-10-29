@@ -70,7 +70,7 @@ Main rules (the reference sections have the full text):
   migration: its stored SHA-256 makes every deployment fail closed. Ship each
   schema change as a new forward-only migration, and keep its `down` section empty.
 - Each new migration must set `lore_system_state.schema_revision` to its own
-  number (currently 19) and set `compatible_from` in the same final UPDATE. In the
+  number (currently 23) and set `compatible_from` in the same final UPDATE. In the
   same change, bump `LATEST_SCHEMA_REVISION`
   (`scripts/database/lib/migration-preflight.ts`) and `LORE_SCHEMA_REVISION`
   (`src/modules/operations/service.ts`).

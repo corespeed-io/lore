@@ -169,6 +169,20 @@ its own:
   (`name_simple`, `name_english`, `name_relaxed_english`, `name_cjk`) over the title
   and gloss that answer the Memory's first chunk, as `referenceLexicalCandidates`
   specifies. Graph labels read the title, not `metadata.title`.
+- **The semantic channel comes from the host's `lore.semantic_candidates`.** Like
+  `lore.lexical_candidates`, it applies the host's access policy itself, returns
+  chunk ids and ranks only, and must answer exactly what
+  `referenceSemanticCandidates` (`./testing`) answers through that policy
+  (`compareSemanticCandidates` checks it). The engine reads every candidate back.
+  A host may answer it with the reference statement; Lore OSS checks visibility
+  once for each Memory instead of through each chunk's policies, which made the
+  channel about five times faster on a 55k-chunk Workspace.
+- **Episode evidence search comes from the host's `lore.episode_evidence_candidates`.**
+  It answers the simple, English, CJK, and semantic channels, applies the host's
+  access policy itself, returns ids and per-channel ranks only, and must answer
+  exactly what `referenceEpisodeEvidenceCandidates` (`./testing`) answers through
+  that policy (`compareEpisodeEvidenceCandidates` checks it). The `episodes`
+  schema-contract group lists it.
 - **A Memory has an optional `occurredAt`.** It is a string (RFC 3339 UTC) or null
   on `Memory`: when the event or statement the Memory records happened, as its
   writer states it, not when it was stored. `RememberMemory`, `InsertMemoryRecord`,

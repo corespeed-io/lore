@@ -412,6 +412,34 @@ whoever owns it.
   acceptance of a Proposal that sets one. `tests/server/memory-occurred-at-upgrade.test.ts`
   upgrades a revision-17 database with data and runs a revision-17 application's
   statements against it.
+  `0020_semantic_candidates.sql` adds `lore.semantic_candidates`, a SECURITY DEFINER
+  function (EXECUTE: `lore_app` only, `search_path` pinned) that runs the semantic
+  channel with the `memories_select` predicate and returns chunk ids and ranks only.
+  It keeps `compatible_from = 9`: an older instance never names it.
+  `0021_once_per_statement_read_checks.sql` (transactional, 5s `lock_timeout`)
+  gives the read policies 0004 left alone the same form: `episodes`,
+  `episode_evidence_chunks`, `episode_evidence_chunk_embeddings`, `memory_events`,
+  `memory_import_provenance`, `memory_code_evidence`, `memory_observation_evidence`,
+  `memory_proposals`, `memory_proposal_evidence`, and
+  `memory_proposal_code_evidence` now check the Workspace once per statement and
+  compare only the Workspace, owner, and scope for each row (Proposals: the owner,
+  and a human Actor's Membership once per statement). Visibility is unchanged:
+  `tests/server/read-policy-equivalence.test.ts` compares each policy with its old
+  expression for Users, Agents, revoked access, and rows with missing, private,
+  expired, or other-Workspace parents, and refuses a per-row membership call in
+  those policies. A new read policy uses this form too. On 20k evidence chunks it
+  made Episode evidence search about 2.2 times faster (hybrid 2.3 s to 1.0 s). It
+  keeps `compatible_from = 9`: every Actor sees the same rows.
+  `0022_episode_evidence_candidates.sql` adds `lore.episode_evidence_candidates`, a
+  SECURITY DEFINER function (EXECUTE: `lore_app` only, `search_path` pinned) that
+  runs the four Episode evidence channels with the `episodes_select` predicate and
+  returns chunk ids and per-channel ranks only;
+  `0023_index_episode_evidence_concurrently.sql` (`transaction:false`) builds the
+  Workspace-leading GINs it probes (`search_vector`, `search_vector_english`, and
+  `lore.extract_cjk_grams(normalize(content, NFC))`) and drops the baseline's
+  single-column ones, which no request could use. Both keep `compatible_from = 9`.
+  On 20k evidence chunks they took Episode evidence search from 0.48 s to 21 ms
+  (lexical) and from 1.0 s to 0.15 s (hybrid).
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -425,7 +453,7 @@ whoever owns it.
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 19) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 23) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -444,7 +472,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (19), and
+  `tests/integration/api.test.ts` pin the current revision (23), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -1422,7 +1450,17 @@ Index loops. Keep local Ollama at one unless measured.
   and read-only MCP `lore_search_evidence` search raw evidence separately from
   canonical Memory. This first public path is lexical (simple/English FTS plus
   bounded CJK substring grams), not semantic QA or automatic conflict resolution.
-  Metadata and Episode scope filter every channel before top-k. Excerpts carry
+  Metadata and Episode scope filter every channel before top-k. Since revision 22
+  the channels (simple and English FTS, CJK grams, and the semantic channel) run in
+  the host's `lore.episode_evidence_candidates`, built and guarded like
+  `lore.lexical_candidates`, and the engine reads every candidate back under RLS.
+  It must answer exactly what `referenceEpisodeEvidenceCandidates` (the
+  pre-revision-22 statement) answers; `tests/server/episode-evidence-candidates.test.ts`
+  compares them for Users, Agents, revoked access, filters, and ties, and pins the
+  grant, failing closed, the read-back, exactness with the HNSW index priced in, and
+  that each probe uses 0023's Workspace-leading GIN as the owner. The CJK probe tests
+  `lore.extract_cjk_grams(normalize(content, NFC)) && grams`, the index expression;
+  the count it ranks by stays `strpos(normalize(content, NFC), gram) > 0`. Excerpts carry
   Episode/Observation ids, source `observedAt`, and index revision and inclusive exact chunk ordinals;
   chronology is evidence, not an authority rule. The existing optional dense/planning/reranking Core seam remains
   available to evaluation, without adding a background Episode embedding job.
@@ -1514,8 +1552,24 @@ Index loops. Keep local Ollama at one unless measured.
   `OFFSET 0`), because about half of them are stored out of line and every column
   reference would fetch them again. What remains is scoring every chunk that matches
   two relaxed terms, which a query of words in a third of the Workspace makes about
-  16k chunks (~0.4 s). The
-  semantic channel still runs on the tables under RLS (a separate follow-up).
+  16k chunks (~0.4 s).
+  Since revision 20 the semantic channel runs in the host's `lore.semantic_candidates`
+  (`db/migrations/0020`), built and guarded like `lore.lexical_candidates`. Under RLS
+  each embedded chunk passed the chunk and embedding policies, which look up its
+  Memory again, one row at a time; the function checks visibility once for each
+  Memory, computes each distance in the scan (a parallel worker can), and reads a
+  chunk's ordinal only for the top candidates (`FETCH FIRST … WITH TIES` on distance
+  and recency keeps every row the full order can place in the top). It stays exact:
+  the distance is `(embedding <=> query) + 0`, which the planner cannot match to the
+  HNSW index, so no ORDER BY becomes that approximate scan (it stops after
+  `hnsw.ef_search` candidates, before the filters). It must answer exactly what
+  `referenceSemanticCandidates` (the pre-revision-20 statement) answers; the engine
+  contract suite and `tests/server/semantic-candidates.test.ts` compare them, the
+  latter for Agents, revoked access, ties, and with sequential scans and sorts priced
+  out, and pin the grant, failing closed, and the read-back. Measured on PostgreSQL 18
+  with 55k visible 1024-dimension chunks (2026-10-25,
+  `tools/evaluation/database/measure-search-latency.ts`): the channel went from about
+  1.5 s to 0.3 s, and hybrid search with rare words from 1.56 s to 0.30 s.
   Since revision 15 the function also runs four name channels over a Memory's title
   and English gloss, `lore.memory_name_text(title, gloss)` (`name_simple`,
   `name_english`, `name_relaxed_english`, `name_cjk`), the content channels' rules
@@ -1676,8 +1730,9 @@ choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
 preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless
 provider, model, and revision all match one active or rolling-deploy-compatible
 generation. Embedding model selection is not a Workspace/User product setting. The
-semantic query must keep its `MATERIALIZED` exact-generation CTE so global HNSW
-traversal cannot mix incompatible spaces before top-k.
+semantic query must stay exact and filter to one generation before top-k, so global
+HNSW traversal cannot mix incompatible spaces or drop candidates
+(`lore.semantic_candidates` keeps the distance out of the index's reach).
 `lore-embedding-v2` is scoped to Qwen3/Ollama and applies Qwen3-Embedding's fixed
 official retrieval instruction to query texts only; Qwen document texts and
 canonical chunking remain unchanged. Google, OpenAI, and non-Qwen Ollama models
@@ -2008,6 +2063,18 @@ the `graph_benchmark` schema. The seeder refuses to rebuild its schema in a
 database without `bench` or `benchmark` in the name. It is renderer load data,
 not a persisted Memory Affinity model and not an Evaluation Suite.
 
+### Search latency dataset
+
+`bun run benchmark:search-latency` times Memory search and Episode evidence search
+(lexical and hybrid) as `lore_app` under RLS and, with `BENCHMARK_EXPLAIN=1`, prints
+each Memory search plan; with
+`BENCHMARK_VERIFY=1` it also checks `lore.semantic_candidates` and
+`lore.episode_evidence_candidates` against their reference statements. Seed a
+migrated disposable `bench` database first with
+`tools/evaluation/database/search-latency-corpus.sql` (its header gives the command).
+Its embeddings are random vectors: they measure cost, never retrieval quality, so
+never report its numbers as a quality score.
+
 ## Toolchain, tests, and pull requests
 
 The existing application uses:
@@ -2085,6 +2152,7 @@ bun run db:embedding:report # report build-generation coverage
 bun run db:embedding:activate # atomically activate one complete generation
 bun run db:embedding:requeue-dead # count, or with --apply re-arm, one generation's dead embedding jobs
 bun run benchmark:graph:seed # rebuild an isolated renderer stress database
+bun run benchmark:search-latency # time Memory search under RLS on a seeded bench database
 bun run benchmark:retrieval # benchmark retrieval in an isolated migrated database
 bun run benchmark:longmemeval:fetch # download and verify the pinned cleaned S split
 bun run benchmark:longmemeval # run LongMemEval-S locally against Lore

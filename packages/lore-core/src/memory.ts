@@ -404,7 +404,10 @@ interface SearchStatementInput {
  * `lore.lexical_candidates`, whose answer must equal the reference channels in
  * `./testing` (`referenceLexicalCandidates`); the host runs them where its indexes
  * can serve them, which under RLS a query on the tables cannot. The semantic channel
- * runs here. Reciprocal-rank fusion (k = 60) scores each chunk across the channels.
+ * comes from `lore.semantic_candidates`, whose answer must equal
+ * `referenceSemanticCandidates`; the host checks visibility once for each Memory
+ * rather than through the policies of every embedded chunk. Reciprocal-rank fusion
+ * (k = 60) scores each chunk across the channels.
  */
 function searchStatement(input: SearchStatementInput): PostgresStatement<SearchRow> {
   return statement<SearchRow>(
@@ -440,51 +443,39 @@ function searchStatement(input: SearchStatementInput): PostgresStatement<SearchR
          ON memory.workspace_id = $2
         AND memory.id = candidate.memory_id
      ),
-     active_semantic_chunks AS MATERIALIZED (
-       SELECT
-         chunk.id,
-         chunk.memory_id,
-         chunk.ordinal,
-         memory.updated_at AS memory_updated_at,
-         embedded.embedding
-       FROM memory_chunks chunk
-       JOIN memories memory
-         ON memory.id = chunk.memory_id
-        AND memory.workspace_id = chunk.workspace_id
-       JOIN memory_chunk_embeddings embedded
-         ON embedded.workspace_id = chunk.workspace_id
-        AND embedded.memory_id = chunk.memory_id
-        AND embedded.chunk_id = chunk.id
-       JOIN embedding_generations generation
-         ON generation.id = embedded.generation_id
-       WHERE $3::text IS NOT NULL
-         AND chunk.workspace_id = $2
-         AND generation.embedding_provider = $7
-         AND generation.embedding_model = $8
-         AND generation.embedding_revision = $9
-         AND generation.embedding_dimensions = ${input.embeddingDimensions}
-         AND generation.status IN ('active', 'retiring')
-         AND ($12::memory_scope IS NULL OR memory.scope = $12::memory_scope)
-         AND ($13::timestamptz IS NULL OR memory.updated_at >= $13::timestamptz)
-         AND ($14::timestamptz IS NULL OR memory.updated_at < $14::timestamptz)
-         AND ($15::jsonb IS NULL OR memory.metadata @> $15::jsonb)
-         AND NOT (memory.id = ANY($16::uuid[]))
-     ),
      semantic_candidates AS (
+       -- The semantic channel runs in the host's lore.semantic_candidates, which
+       -- answers chunk ids and ranks only; every candidate is read back here, through
+       -- the caller's own access policy, as the lexical candidates are.
        SELECT
-         chunk.id AS chunk_id,
-         chunk.memory_id,
+         candidate.chunk_id,
+         candidate.memory_id,
          chunk.ordinal AS chunk_ordinal,
-         chunk.memory_updated_at,
-         row_number() OVER (
-           ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}),
-                    chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
-         ) AS candidate_rank
-       FROM active_semantic_chunks chunk
-       WHERE (chunk.embedding <=> $3::vector(${input.embeddingDimensions})) <= $5
-       ORDER BY chunk.embedding <=> $3::vector(${input.embeddingDimensions}),
-                chunk.memory_updated_at DESC, chunk.ordinal DESC, chunk.id
-       LIMIT $4
+         memory.updated_at AS memory_updated_at,
+         candidate.candidate_rank
+       FROM lore.semantic_candidates(
+         $2::uuid,
+         $3::vector(${input.embeddingDimensions}),
+         $7::text,
+         $8::text,
+         $9::text,
+         ${input.embeddingDimensions},
+         $5::double precision,
+         $12::memory_scope,
+         $13::timestamptz,
+         $14::timestamptz,
+         $15::jsonb,
+         $16::uuid[],
+         $4::integer
+       ) candidate
+       JOIN memory_chunks chunk
+         ON chunk.workspace_id = $2
+        AND chunk.id = candidate.chunk_id
+        AND chunk.memory_id = candidate.memory_id
+       JOIN memories memory
+         ON memory.workspace_id = $2
+        AND memory.id = candidate.memory_id
+       WHERE $3::text IS NOT NULL
      ),
      reciprocal_rank AS (
        SELECT
