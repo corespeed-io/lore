@@ -123,7 +123,7 @@ export const CORE_SCHEMA_CONTRACT = {
     // engine reads every candidate back itself.
     functions: [
       "lore.lexical_candidates(uuid,text,text[],text[],integer,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
-      "lore.semantic_candidates(uuid,vector,text,text,text,integer,double precision,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer)",
+      "lore.semantic_candidates(uuid,vector,text,text,text,integer,double precision,memory_scope,timestamptz,timestamptz,jsonb,uuid[],integer,integer)",
     ],
     types: ["vector"],
     enums: { memory_scope: MEMORY_SCOPES },

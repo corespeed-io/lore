@@ -154,10 +154,17 @@ test("the function stays exact when the planner would rather use the HNSW index"
   const ids = await seedCorpus(context);
   const asked = (await queries(ids)).filter((query) => query.candidateLimit === 40);
   const storage = createMemoryStorage(context.database, context.alice);
+  // The function sets its own hnsw.ef_search, which a session setting cannot lower.
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `ALTER FUNCTION lore.semantic_candidates(uuid, vector, text, text, text, integer,
+         double precision, memory_scope, timestamptz, timestamptz, jsonb, uuid[], integer,
+         integer) SET hnsw.ef_search = 1`,
+    ),
+  );
   const answers = await storage.database.transaction(async (transaction) => {
     await transaction.query("SET LOCAL enable_seqscan = off");
     await transaction.query("SET LOCAL enable_sort = off");
-    await transaction.query("SET LOCAL hnsw.ef_search = 1");
     return transaction.batch(
       asked.map((query) => semanticCandidatesStatement(context.alice.workspaceId, query)),
     );
@@ -170,6 +177,103 @@ test("the function stays exact when the planner would rather use the HNSW index"
     expect(lines).toEqual(reference[index]?.reference);
   }
   expect(answers.some((answer) => answer.rows.length > 3)).toBe(true);
+});
+
+test("a large Workspace's answer comes from the HNSW index, under the same visibility", async () => {
+  // exactScanLimit 0 makes every Workspace large. The corpus is far smaller than
+  // hnsw.ef_search, so the walk reaches every vector and its answer must equal the
+  // exact reference, for every caller. Small limits let the walk fill them, so the
+  // index's answer is the one returned; a limit the visible rows cannot fill falls
+  // back to the exact comparison.
+  const context = await createMemoryTestContext();
+  const ids = await seedCorpus(context);
+  const aliceAgent = await readerAgent(context, context.alice);
+  const asked = (await queries(ids)).map((query) => ({ ...query, exactScanLimit: 0 }));
+  // So few rows would be read faster without the index; price that out, inside the
+  // function, so the walk is what runs.
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `ALTER FUNCTION lore.semantic_candidates(uuid, vector, text, text, text, integer,
+         double precision, memory_scope, timestamptz, timestamptz, jsonb, uuid[], integer,
+         integer) SET enable_seqscan = off`,
+    ),
+  );
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `ALTER FUNCTION lore.semantic_candidates(uuid, vector, text, text, text, integer,
+         double precision, memory_scope, timestamptz, timestamptz, jsonb, uuid[], integer,
+         integer) SET enable_sort = off`,
+    ),
+  );
+  // A small hnsw.ef_search keeps the index's estimated cost below the alternatives;
+  // the iterative scan still walks on until each limit is filled.
+  await context.adminDatabase.transaction((transaction) =>
+    transaction.query(
+      `ALTER FUNCTION lore.semantic_candidates(uuid, vector, text, text, text, integer,
+         double precision, memory_scope, timestamptz, timestamptz, jsonb, uuid[], integer,
+         integer) SET hnsw.ef_search = 10`,
+    ),
+  );
+  // pgvector counts no HNSW scan in the statistics, so count every other way to read
+  // memory_chunk_embeddings: sequential scans and its btree indexes.
+  const otherReads = async () => {
+    // The flush happens when its own transaction ends, before the read below.
+    await context.adminDatabase.transaction((transaction) =>
+      transaction.query("SELECT pg_stat_force_next_flush()"),
+    );
+    return context.adminDatabase.transaction(async (transaction) => {
+      await transaction.query("SELECT pg_stat_clear_snapshot()");
+      const result = await transaction.query<{ reads: string }>(
+        `SELECT (table_stats.seq_scan + coalesce((
+                  SELECT sum(index_stats.idx_scan) FROM pg_stat_user_indexes index_stats
+                  WHERE index_stats.relname = 'memory_chunk_embeddings'
+                    AND index_stats.indexrelname <> 'memory_chunk_embeddings_cosine_idx'), 0))::text
+                AS reads
+         FROM pg_stat_user_tables table_stats
+         WHERE table_stats.relname = 'memory_chunk_embeddings'`,
+      );
+      return Number(result.rows[0]?.reads ?? 0);
+    });
+  };
+
+  let found = 0;
+  for (const actor of [context.alice, context.bob, context.carol, aliceAgent.actor]) {
+    const storage = createMemoryStorage(context.database, actor);
+    for (const { query, host, reference } of await compareSemanticCandidates(storage, asked)) {
+      const label = `${actor.userId}/${actor.agentId ?? "human"} ${JSON.stringify({
+        ...query,
+        queryEmbedding: undefined,
+      })}`;
+      expect(host, label).toEqual(reference);
+      found += reference.length;
+    }
+  }
+  expect(found).toBeGreaterThan(100);
+
+  // One answer the walk can fill: the vectors were read through the HNSW index alone.
+  const [filled] = asked.filter((query) => query.candidateLimit === 2);
+  if (!filled) throw new Error("Expected a query with limit 2");
+  const before = await otherReads();
+  const [walked] = await context.database.transaction(async (transaction) => {
+    installActorContext(transaction, context.alice);
+    return transaction.batch([semanticCandidatesStatement(context.alice.workspaceId, filled)]);
+  });
+  expect(walked.rows.length).toBe(2);
+  expect(await otherReads()).toBe(before);
+
+  // The default limit keeps this small Workspace on the exact comparison, which reads
+  // the table another way.
+  const [exact] = await context.database.transaction(async (transaction) => {
+    installActorContext(transaction, context.alice);
+    return transaction.batch([
+      semanticCandidatesStatement(context.alice.workspaceId, {
+        ...filled,
+        exactScanLimit: undefined,
+      }),
+    ]);
+  });
+  expect(exact.rows.length).toBe(2);
+  expect(await otherReads()).toBeGreaterThan(before);
 });
 
 test("the function fails closed: another Workspace's id, or no Actor, answers nothing", async () => {
@@ -241,15 +345,29 @@ test("only lore_app may execute the definer function, and it pins search_path", 
     }>(
       `SELECT prosecdef AS definer, provolatile AS volatility, coalesce(proconfig, '{}') AS config
        FROM pg_proc
-       WHERE pronamespace = 'lore'::regnamespace AND proname = 'semantic_candidates'`,
+       WHERE pronamespace = 'lore'::regnamespace AND proname = 'semantic_candidates'
+       ORDER BY pronargs`,
     );
     return result.rows;
   });
   expect(functions).toEqual([
+    // 0020's 13-argument function, for revision-20 through 23 instances.
     {
       definer: true,
       volatility: "s",
       config: ["search_path=pg_catalog, public, pg_temp", "plan_cache_mode=force_custom_plan"],
+    },
+    {
+      definer: true,
+      volatility: "s",
+      config: [
+        "search_path=pg_catalog, public, pg_temp",
+        "plan_cache_mode=force_custom_plan",
+        "hnsw.ef_search=200",
+        // pgvector 0.8 or later: the walk may go past ef_search until the limit fills.
+        "hnsw.iterative_scan=relaxed_order",
+        "hnsw.max_scan_tuples=40000",
+      ],
     },
   ]);
   const [query] = await queries([]);
@@ -273,7 +391,7 @@ test("search reads every candidate back under RLS, so an over-answering function
          embedding_model text, embedding_revision text, embedding_dimensions integer,
          distance_threshold double precision, scope_filter memory_scope,
          updated_after timestamptz, updated_before timestamptz, metadata_filter jsonb,
-         excluded_memory_ids uuid[], candidate_limit integer)
+         excluded_memory_ids uuid[], candidate_limit integer, exact_scan_limit integer)
        RETURNS TABLE(chunk_id uuid, memory_id uuid, candidate_rank bigint)
        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public
        AS $$ SELECT chunk.id, chunk.memory_id, 1::bigint FROM memory_chunks chunk $$`,

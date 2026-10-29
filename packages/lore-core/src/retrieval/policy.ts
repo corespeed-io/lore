@@ -10,6 +10,17 @@ export const RETRIEVAL_EVIDENCE_POLICY = {
   answerEvidence: "bounded-top-chunks-with-whole-small-memory",
 } as const;
 
+/**
+ * How the semantic channel finds a Workspace's nearest chunks. Below
+ * `exactScanLimit` vectors of the generation it compares every one (exact, and
+ * cheap at that size); from there on the host may answer from an approximate index,
+ * and must fall back to the exact comparison when that answer could be short.
+ */
+export const RETRIEVAL_SEMANTIC_POLICY = {
+  revision: "exact-below-limit-approximate-above-v1",
+  exactScanLimit: 20_000,
+} as const;
+
 export const RETRIEVAL_ENTITY_ALIAS_POLICY = {
   revision: "deterministic-exact-alias-rrf-v1",
   candidateGeneration: "independent-rls-filtered-chunk-channel",

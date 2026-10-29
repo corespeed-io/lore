@@ -440,6 +440,12 @@ whoever owns it.
   single-column ones, which no request could use. Both keep `compatible_from = 9`.
   On 20k evidence chunks they took Episode evidence search from 0.48 s to 21 ms
   (lexical) and from 1.0 s to 0.15 s (hybrid).
+  `0024_approximate_semantic_candidates.sql` adds a 14-argument
+  `lore.semantic_candidates`: the new last argument, `exact_scan_limit`, chooses the
+  exact comparison or the HNSW walk with exact fallback. A `DO` block sets
+  `hnsw.iterative_scan` and `hnsw.max_scan_tuples` only on pgvector 0.8 or later,
+  which define them. The 13-argument function of 0020 stays, exact, for revision-20
+  through 23 instances, so `compatible_from` stays 9.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -453,7 +459,7 @@ whoever owns it.
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 23) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 24) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -472,7 +478,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (23), and
+  `tests/integration/api.test.ts` pin the current revision (24), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -1570,6 +1576,24 @@ Index loops. Keep local Ollama at one unless measured.
   with 55k visible 1024-dimension chunks (2026-10-25,
   `tools/evaluation/database/measure-search-latency.ts`): the channel went from about
   1.5 s to 0.3 s, and hybrid search with rare words from 1.56 s to 0.30 s.
+  Since revision 24 a large Workspace's answer comes from the HNSW index
+  (`db/migrations/0024`). The engine passes `RETRIEVAL_SEMANTIC_POLICY.exactScanLimit`
+  (20,000). Below that many vectors of the generation, the function stays exact, as
+  above. At or above it, the function walks the index in distance order
+  (`hnsw.ef_search` 200, `hnsw.iterative_scan = relaxed_order`,
+  `hnsw.max_scan_tuples` 40,000 on pgvector 0.8 or later), and only visible,
+  filtered rows count toward the limit, so visibility still applies before top-k. A
+  walk that fills fewer rows than the limit (a Workspace that is a small share of the
+  index, or an older pgvector) falls back to the exact comparison; a short
+  approximate answer is never returned. The distance threshold applies after the
+  walk, and `WITH TIES` keeps equal distances for the exact tie order. Measured on 48k
+  real chunks (LongMemEval-S sessions, all-minilm vectors padded to 1024, 100
+  questions, 2026-10-29): recall against the exact answer was 98.7% at k 40 with no
+  threshold, and 99.95% with the default threshold 0.5; the channel took 15.6 ms
+  instead of 556 ms (k 200: 97.4% and 99.99%, 27 ms). At k 800 the planner chooses
+  the exact plan itself (about 0.36 s). `tests/server/semantic-candidates.test.ts`
+  runs the approximate path (`exactScanLimit: 0`) for Users and an Agent against the
+  reference, and proves that the vectors were read through the HNSW index.
   Since revision 15 the function also runs four name channels over a Memory's title
   and English gloss, `lore.memory_name_text(title, gloss)` (`name_simple`,
   `name_english`, `name_relaxed_english`, `name_cjk`), the content channels' rules
@@ -1730,9 +1754,9 @@ choose `LORE_EMBEDDING_PROVIDER` and `LORE_EMBEDDING_MODEL`; dimension and
 preprocessing revision are Lore v1 protocol invariants. Never compare vectors unless
 provider, model, and revision all match one active or rolling-deploy-compatible
 generation. Embedding model selection is not a Workspace/User product setting. The
-semantic query must stay exact and filter to one generation before top-k, so global
-HNSW traversal cannot mix incompatible spaces or drop candidates
-(`lore.semantic_candidates` keeps the distance out of the index's reach).
+semantic query must filter to one generation and to visible rows before top-k, so
+global HNSW traversal cannot mix incompatible spaces, and must never return a short
+approximate answer (`lore.semantic_candidates` falls back to the exact comparison).
 `lore-embedding-v2` is scoped to Qwen3/Ollama and applies Qwen3-Embedding's fixed
 official retrieval instruction to query texts only; Qwen document texts and
 canonical chunking remain unchanged. Google, OpenAI, and non-Qwen Ollama models

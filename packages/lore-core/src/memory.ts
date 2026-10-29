@@ -41,7 +41,11 @@ import type {
   SearchMemory,
   UpdateMemory,
 } from "./memory-types";
-import { RETRIEVAL_CONTEXT_GROUP_POLICY, RETRIEVAL_ENTITY_ALIAS_POLICY } from "./retrieval/policy";
+import {
+  RETRIEVAL_CONTEXT_GROUP_POLICY,
+  RETRIEVAL_ENTITY_ALIAS_POLICY,
+  RETRIEVAL_SEMANTIC_POLICY,
+} from "./retrieval/policy";
 import {
   cjkLexicalGrams,
   feedbackRetrievalQuery,
@@ -466,7 +470,8 @@ function searchStatement(input: SearchStatementInput): PostgresStatement<SearchR
          $14::timestamptz,
          $15::jsonb,
          $16::uuid[],
-         $4::integer
+         $4::integer,
+         ${RETRIEVAL_SEMANTIC_POLICY.exactScanLimit}
        ) candidate
        JOIN memory_chunks chunk
          ON chunk.workspace_id = $2
