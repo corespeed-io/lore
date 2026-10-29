@@ -9,6 +9,7 @@ import {
   type PostgresTransaction,
   statement,
 } from "./db";
+import { EPISODE_EVIDENCE_INDEX_REVISION } from "./episodes/episode-evidence";
 import { createEmbeddingMaintenance } from "./maintenance";
 import { createMemoryModule, type MemoryScope, RETRIEVAL_ENTITY_ALIAS_POLICY } from "./memory";
 import { cjkLexicalGrams, relaxedEnglishTerms } from "./retrieval/query";
@@ -624,6 +625,197 @@ export async function compareSemanticCandidates(
       queries.flatMap((query) => [
         semanticCandidatesStatement(storage.partitionId, query),
         referenceSemanticCandidates(storage.partitionId, query),
+      ]),
+    );
+    return queries.map((query, index) => ({
+      query,
+      host: lines(results[2 * index]?.rows ?? []),
+      reference: lines(results[2 * index + 1]?.rows ?? []),
+    }));
+  });
+}
+
+/** One Episode evidence search, as the engine's search statement asks for it. */
+export interface EpisodeEvidenceCandidateQuery {
+  query: string;
+  /** Omitted or null, the semantic channel answers nothing. */
+  queryEmbedding?: readonly number[] | null;
+  embeddingProvider?: { provider: string; model: string; revision: string };
+  embeddingDimensions: number;
+  distanceThreshold: number;
+  candidateLimit: number;
+  scope?: MemoryScope | null;
+  metadataFilter?: Record<string, unknown> | null;
+  groupMetadataKey?: string | null;
+  sourceKeys?: readonly string[];
+}
+
+export interface EpisodeEvidenceCandidateRow {
+  channel: string;
+  chunk_id: string;
+  episode_id: string;
+  observation_id: string;
+  candidate_rank: number | string;
+}
+
+/** The parameters both statements bind, in the order the engine binds them. */
+function episodeEvidenceCandidateParameters(
+  partitionId: string,
+  input: EpisodeEvidenceCandidateQuery,
+) {
+  return [
+    partitionId,
+    input.query,
+    cjkLexicalGrams(input.query),
+    input.queryEmbedding
+      ? embeddingVectorLiteral([...input.queryEmbedding], input.embeddingDimensions)
+      : null,
+    input.embeddingProvider?.provider ?? "",
+    input.embeddingProvider?.model ?? "",
+    input.embeddingProvider?.revision ?? "",
+    input.distanceThreshold,
+    EPISODE_EVIDENCE_INDEX_REVISION,
+    input.scope ?? null,
+    input.metadataFilter ? JSON.stringify(input.metadataFilter) : null,
+    input.groupMetadataKey ?? null,
+    [...(input.sourceKeys ?? [])],
+    input.candidateLimit,
+  ];
+}
+
+/** The host's `lore.episode_evidence_candidates`, called with the engine's arguments. */
+export function episodeEvidenceCandidatesStatement(
+  partitionId: string,
+  input: EpisodeEvidenceCandidateQuery,
+): PostgresStatement<EpisodeEvidenceCandidateRow> {
+  const dimensions = validatedEmbeddingDimensions(input.embeddingDimensions);
+  return statement<EpisodeEvidenceCandidateRow>(
+    `SELECT channel, chunk_id, episode_id, observation_id, candidate_rank
+     FROM lore.episode_evidence_candidates(
+       $1::uuid, $2::text, $3::text[], $4::vector(${dimensions}), $5::text, $6::text, $7::text,
+       ${dimensions}, $8::double precision, $9::text, $10::memory_scope, $11::jsonb, $12::text,
+       $13::text[], $14::integer
+     )
+     ORDER BY channel, candidate_rank`,
+    episodeEvidenceCandidateParameters(partitionId, input),
+  );
+}
+
+/**
+ * The channels of Episode evidence search as the engine's statement ran them on the
+ * tables through schema revision 21, which is what `lore.episode_evidence_candidates`
+ * must answer: the same chunks, with the same ranks, in every channel, for the same
+ * caller. Run in a host transaction, it applies the host's access policy the way
+ * that statement did, and the host's function must apply the same policy itself. It
+ * reads every chunk the caller may see, so it is a specification, never a request
+ * path.
+ */
+export function referenceEpisodeEvidenceCandidates(
+  partitionId: string,
+  input: EpisodeEvidenceCandidateQuery,
+): PostgresStatement<EpisodeEvidenceCandidateRow> {
+  const dimensions = validatedEmbeddingDimensions(input.embeddingDimensions);
+  const visible = `chunk.workspace_id = $1::uuid
+         AND chunk.index_revision = $9
+         AND ($10::memory_scope IS NULL OR episode.scope = $10::memory_scope)
+         AND ($11::jsonb IS NULL OR observation.metadata @> $11::jsonb)
+         AND ($12::text IS NULL OR cardinality($13::text[]) = 0
+           OR observation.metadata->>$12 = ANY($13::text[]))`;
+  const joins = `JOIN observations observation
+         ON observation.id = chunk.observation_id AND observation.workspace_id = chunk.workspace_id
+       JOIN episodes episode
+         ON episode.id = chunk.episode_id AND episode.workspace_id = chunk.workspace_id`;
+  const lexical = (vector: string, config: string) => `
+       SELECT chunk.id AS chunk_id, chunk.episode_id, chunk.observation_id,
+         row_number() OVER (
+           ORDER BY ts_rank_cd(chunk.${vector}, websearch_to_tsquery('${config}', $2), 32) DESC,
+                    observation.observed_at DESC, chunk.observation_ordinal DESC,
+                    chunk.chunk_ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM episode_evidence_chunks chunk
+       ${joins}
+       WHERE ${visible}
+         AND chunk.${vector} @@ websearch_to_tsquery('${config}', $2)
+       ORDER BY ts_rank_cd(chunk.${vector}, websearch_to_tsquery('${config}', $2), 32) DESC,
+                observation.observed_at DESC, chunk.observation_ordinal DESC,
+                chunk.chunk_ordinal DESC, chunk.id
+       LIMIT $14`;
+  return statement<EpisodeEvidenceCandidateRow>(
+    `WITH simple_lexical AS (${lexical("search_vector", "simple")}),
+     english_lexical AS (${lexical("search_vector_english", "english")}),
+     cjk_lexical AS (
+       SELECT chunk.id AS chunk_id, chunk.episode_id, chunk.observation_id,
+         row_number() OVER (ORDER BY matches.count DESC, observation.observed_at DESC,
+           chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id) AS candidate_rank
+       FROM episode_evidence_chunks chunk
+       ${joins}
+       CROSS JOIN LATERAL (
+         SELECT count(*) AS count FROM unnest($3::text[]) gram
+         WHERE strpos(normalize(chunk.content, NFC), gram) > 0
+       ) matches
+       WHERE ${visible} AND matches.count > 0
+       ORDER BY matches.count DESC, observation.observed_at DESC,
+         chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
+       LIMIT $14
+     ),
+     active_semantic_chunks AS MATERIALIZED (
+       SELECT chunk.id, chunk.episode_id, chunk.observation_id, chunk.observation_ordinal,
+         chunk.chunk_ordinal, observation.observed_at, embedded.embedding
+       FROM episode_evidence_chunks chunk
+       ${joins}
+       JOIN episode_evidence_chunk_embeddings embedded
+         ON embedded.chunk_id = chunk.id AND embedded.workspace_id = chunk.workspace_id
+       JOIN embedding_generations generation ON generation.id = embedded.generation_id
+       WHERE $4::text IS NOT NULL AND ${visible}
+         AND generation.embedding_provider = $5
+         AND generation.embedding_model = $6
+         AND generation.embedding_revision = $7
+         AND generation.embedding_dimensions = ${dimensions}
+         AND generation.status IN ('active', 'retiring')
+     ),
+     semantic AS (
+       SELECT chunk.id AS chunk_id, chunk.episode_id, chunk.observation_id,
+         row_number() OVER (
+           ORDER BY chunk.embedding <=> $4::vector(${dimensions}), chunk.observed_at DESC,
+                    chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
+         ) AS candidate_rank
+       FROM active_semantic_chunks chunk
+       WHERE (chunk.embedding <=> $4::vector(${dimensions})) <= $8::double precision
+       ORDER BY chunk.embedding <=> $4::vector(${dimensions}), chunk.observed_at DESC,
+                chunk.observation_ordinal DESC, chunk.chunk_ordinal DESC, chunk.id
+       LIMIT $14
+     )
+     SELECT * FROM (
+       SELECT 'simple' AS channel, * FROM simple_lexical
+       UNION ALL SELECT 'english', * FROM english_lexical
+       UNION ALL SELECT 'cjk', * FROM cjk_lexical
+       UNION ALL SELECT 'semantic', * FROM semantic
+     ) candidates
+     ORDER BY channel, candidate_rank`,
+    episodeEvidenceCandidateParameters(partitionId, input),
+  );
+}
+
+/**
+ * Run each query through the host's `lore.episode_evidence_candidates` and through
+ * the reference channels, in one transaction of `storage`, and return both answers
+ * as `channel rank chunk episode observation` lines. A host passes when every pair
+ * is equal.
+ */
+export async function compareEpisodeEvidenceCandidates(
+  storage: MemoryStorageContext,
+  queries: readonly EpisodeEvidenceCandidateQuery[],
+): Promise<{ query: EpisodeEvidenceCandidateQuery; host: string[]; reference: string[] }[]> {
+  const lines = (rows: readonly EpisodeEvidenceCandidateRow[]) =>
+    rows.map(
+      (row) =>
+        `${row.channel} ${Number(row.candidate_rank)} ${row.chunk_id} ${row.episode_id} ${row.observation_id}`,
+    );
+  return storage.database.transaction(async (transaction) => {
+    const results = await transaction.batch(
+      queries.flatMap((query) => [
+        episodeEvidenceCandidatesStatement(storage.partitionId, query),
+        referenceEpisodeEvidenceCandidates(storage.partitionId, query),
       ]),
     );
     return queries.map((query, index) => ({

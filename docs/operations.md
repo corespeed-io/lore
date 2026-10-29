@@ -686,6 +686,15 @@ ACCESS EXCLUSIVE on its table for a catalog change only; if a long transaction h
 one of them, the timeout expires, nothing is recorded, and a rerun repeats the file.
 Every Actor sees exactly the rows it saw before.
 
+`0022` and `0023` keep `compatible_from` at 9. `0022` is transactional and only
+creates `lore.episode_evidence_candidates`; from the moment it commits, a
+revision-23 instance answers Episode evidence search through it, with the same
+candidates as before, by scanning until `0023`'s concurrent builds commit. `0023`
+builds three Workspace-leading GIN indexes on `episode_evidence_chunks` and drops
+the two baseline GINs, which no request could use. The CJK index computes the grams
+of every evidence chunk once during its build (CPU, not locks) and on each insert
+afterwards.
+
 `0010` adds `lore_system_state.compatible_from`, and both migrations set it to 9: a
 revision-9 application never reads the dropped columns, policy, or indexes, and a
 revision-9 worker embeds whatever chunks a claim returns and writes each by chunk

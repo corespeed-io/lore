@@ -321,7 +321,13 @@ export const CORE_SCHEMA_CONTRACT = {
       },
       embedding_generations: EMBEDDING_GENERATIONS,
     },
-    functions: ["lore.ensure_embedding_generation(text,text,integer,text)"],
+    // The search channels. The host defines the body, applying its own access
+    // policy, and it must answer exactly what referenceEpisodeEvidenceCandidates
+    // (`./testing`) answers through that policy. The engine reads every candidate back.
+    functions: [
+      "lore.ensure_embedding_generation(text,text,integer,text)",
+      "lore.episode_evidence_candidates(uuid,text,text[],vector,text,text,text,integer,double precision,text,memory_scope,jsonb,text,text[],integer)",
+    ],
     types: ["vector"],
     enums: { episode_kind: EPISODE_KINDS, observation_kind: OBSERVATION_KINDS },
     values: { "embedding_generations.status": ["active", "retiring"] },

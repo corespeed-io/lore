@@ -57,6 +57,8 @@ const GRANT_MAP: Readonly<Record<string, readonly string[]>> = {
   "lore.enqueue_code_index_job(uuid,text,text,text,text)": ["lore_app"],
   "lore.enqueue_stale_memory_embedding_jobs(text,text,text,integer)": ["lore_maintenance"],
   "lore.ensure_embedding_generation(text,text,integer,text)": ["lore_app", "lore_maintenance"],
+  "lore.episode_evidence_candidates(uuid,text,text[],vector,text,text,text,integer,double precision,text,memory_scope,jsonb,text,text[],integer)":
+    ["lore_app"],
   "lore.extract_cjk_grams(text)": ["lore_app"],
   "lore.extract_entity_aliases(text)": ["lore_app"],
   "lore.fail_code_index_job(uuid,uuid,text)": ["lore_maintenance"],

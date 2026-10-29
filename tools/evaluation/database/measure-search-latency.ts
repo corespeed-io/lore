@@ -14,6 +14,7 @@ import {
 } from "@corespeed/lore-core";
 import { createEpisodeEvidenceModule } from "@corespeed/lore-core/episodes";
 import {
+  compareEpisodeEvidenceCandidates,
   compareSemanticCandidates,
   type SemanticCandidateQuery,
 } from "@corespeed/lore-core/testing";
@@ -218,6 +219,36 @@ if (verify) {
   }
   console.log(
     `Semantic candidates match the reference: ${queries.length} queries, ${compared} rows`,
+  );
+
+  // lore.episode_evidence_candidates must answer exactly what the RLS reference answers.
+  const [queryEmbedding = []] = await embeddingProvider.embed(["verify"], "query");
+  const evidenceQueries = ["observation 7", "observation", "数据库", "nothing matches"].flatMap(
+    (query) => [
+      { query, embeddingDimensions: dimensions, distanceThreshold: 1, candidateLimit: 120 },
+      {
+        query,
+        queryEmbedding,
+        embeddingProvider,
+        embeddingDimensions: dimensions,
+        distanceThreshold: 1,
+        candidateLimit: 120,
+        scope: "private" as const,
+      },
+    ],
+  );
+  let evidenceRows = 0;
+  for (const { query, host, reference } of await compareEpisodeEvidenceCandidates(
+    storage,
+    evidenceQueries,
+  )) {
+    if (JSON.stringify(host) !== JSON.stringify(reference)) {
+      throw new Error(`Episode evidence candidates differ for ${JSON.stringify(query.query)}`);
+    }
+    evidenceRows += reference.length;
+  }
+  console.log(
+    `Episode evidence candidates match the reference: ${evidenceQueries.length} queries, ${evidenceRows} rows`,
   );
 }
 await database.close();

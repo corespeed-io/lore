@@ -111,13 +111,14 @@ test("transaction:false statements split only at line-ending semicolons outside 
 
 test("the chain sends each transaction:false migration one statement at a time and every other whole", async () => {
   // CONCURRENTLY statements in each index-only migration (a DROP before every
-  // CREATE, plus 0011's plain drops), then its revision.
+  // CREATE, plus the plain drops of 0011 and 0023), then its revision.
   const concurrent: Record<string, { statements: number; revision: number }> = {
     "0005": { statements: 12, revision: 5 },
     "0008": { statements: 10, revision: 8 },
     "0011": { statements: 4, revision: 11 },
     "0013": { statements: 8, revision: 13 },
     "0017": { statements: 6, revision: 17 },
+    "0023": { statements: 8, revision: 23 },
   };
   const versions: string[] = [];
   for (const migration of await migrationFiles()) {

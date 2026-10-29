@@ -430,6 +430,16 @@ whoever owns it.
   those policies. A new read policy uses this form too. On 20k evidence chunks it
   made Episode evidence search about 2.2 times faster (hybrid 2.3 s to 1.0 s). It
   keeps `compatible_from = 9`: every Actor sees the same rows.
+  `0022_episode_evidence_candidates.sql` adds `lore.episode_evidence_candidates`, a
+  SECURITY DEFINER function (EXECUTE: `lore_app` only, `search_path` pinned) that
+  runs the four Episode evidence channels with the `episodes_select` predicate and
+  returns chunk ids and per-channel ranks only;
+  `0023_index_episode_evidence_concurrently.sql` (`transaction:false`) builds the
+  Workspace-leading GINs it probes (`search_vector`, `search_vector_english`, and
+  `lore.extract_cjk_grams(normalize(content, NFC))`) and drops the baseline's
+  single-column ones, which no request could use. Both keep `compatible_from = 9`.
+  On 20k evidence chunks they took Episode evidence search from 0.48 s to 21 ms
+  (lexical) and from 1.0 s to 0.15 s (hybrid).
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -443,7 +453,7 @@ whoever owns it.
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 21) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 23) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -462,7 +472,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (21), and
+  `tests/integration/api.test.ts` pin the current revision (23), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -1440,7 +1450,17 @@ Index loops. Keep local Ollama at one unless measured.
   and read-only MCP `lore_search_evidence` search raw evidence separately from
   canonical Memory. This first public path is lexical (simple/English FTS plus
   bounded CJK substring grams), not semantic QA or automatic conflict resolution.
-  Metadata and Episode scope filter every channel before top-k. Excerpts carry
+  Metadata and Episode scope filter every channel before top-k. Since revision 22
+  the channels (simple and English FTS, CJK grams, and the semantic channel) run in
+  the host's `lore.episode_evidence_candidates`, built and guarded like
+  `lore.lexical_candidates`, and the engine reads every candidate back under RLS.
+  It must answer exactly what `referenceEpisodeEvidenceCandidates` (the
+  pre-revision-22 statement) answers; `tests/server/episode-evidence-candidates.test.ts`
+  compares them for Users, Agents, revoked access, filters, and ties, and pins the
+  grant, failing closed, the read-back, exactness with the HNSW index priced in, and
+  that each probe uses 0023's Workspace-leading GIN as the owner. The CJK probe tests
+  `lore.extract_cjk_grams(normalize(content, NFC)) && grams`, the index expression;
+  the count it ranks by stays `strpos(normalize(content, NFC), gram) > 0`. Excerpts carry
   Episode/Observation ids, source `observedAt`, and index revision and inclusive exact chunk ordinals;
   chronology is evidence, not an authority rule. The existing optional dense/planning/reranking Core seam remains
   available to evaluation, without adding a background Episode embedding job.
@@ -2048,8 +2068,9 @@ not a persisted Memory Affinity model and not an Evaluation Suite.
 `bun run benchmark:search-latency` times Memory search and Episode evidence search
 (lexical and hybrid) as `lore_app` under RLS and, with `BENCHMARK_EXPLAIN=1`, prints
 each Memory search plan; with
-`BENCHMARK_VERIFY=1` it also checks `lore.semantic_candidates` against
-`referenceSemanticCandidates`. Seed a migrated disposable `bench` database first with
+`BENCHMARK_VERIFY=1` it also checks `lore.semantic_candidates` and
+`lore.episode_evidence_candidates` against their reference statements. Seed a
+migrated disposable `bench` database first with
 `tools/evaluation/database/search-latency-corpus.sql` (its header gives the command).
 Its embeddings are random vectors: they measure cost, never retrieval quality, so
 never report its numbers as a quality score.
