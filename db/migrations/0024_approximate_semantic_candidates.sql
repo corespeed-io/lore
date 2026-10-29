@@ -16,8 +16,9 @@
 --   2. At or above it, it walks the HNSW index in distance order, keeping only
 --      visible, filtered rows, until candidate_limit rows have passed. With
 --      pgvector 0.8 or later, hnsw.iterative_scan (relaxed_order) lets the walk go
---      past hnsw.ef_search; the rows are sorted again below, so relaxed order costs
---      no misordering. The distance threshold applies after the walk: a row past it
+--      past hnsw.ef_search; the rows are sorted again in full below (on distance + 0,
+--      so PostgreSQL 17+ cannot reuse the walk's approximate order), so relaxed order
+--      costs no misordering. The distance threshold applies after the walk: a row past it
 --      cannot precede one within it.
 --   3. If the walk returned fewer than candidate_limit rows (it stopped at
 --      hnsw.max_scan_tuples, as it does when the Workspace is a small share of the
@@ -137,7 +138,12 @@ CREATE FUNCTION lore.semantic_candidates(
     FETCH FIRST candidate_limit ROWS WITH TIES
   ),
   nearest AS (
-    SELECT approximate.chunk_id, approximate.memory_id, approximate.updated_at, approximate.distance
+    -- Relaxed order means the walk's rows are only roughly sorted, but PostgreSQL 17
+    -- and later may take a materialized CTE's ORDER BY as the order of its rows and
+    -- skip or shorten the sort below. Adding zero makes the distance a new
+    -- expression, so the rows are sorted again in full.
+    SELECT approximate.chunk_id, approximate.memory_id, approximate.updated_at,
+      approximate.distance + 0.0::double precision AS distance
     FROM approximate
     WHERE (SELECT approximately FROM answered)
       AND approximate.distance <= distance_threshold
