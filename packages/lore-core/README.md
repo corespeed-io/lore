@@ -176,7 +176,10 @@ its own:
   (`compareSemanticCandidates` checks it). The engine reads every candidate back.
   A host may answer it with the reference statement; Lore OSS checks visibility
   once for each Memory instead of through each chunk's policies, which made the
-  channel about five times faster on a 55k-chunk Workspace.
+  channel about five times faster on a 55k-chunk Workspace. Its last argument is
+  `RETRIEVAL_SEMANTIC_POLICY.exactScanLimit`: from that many vectors on, a host may
+  answer from an approximate index, but must fall back to the exact answer whenever
+  the approximate one is short. The reference is always exact.
 - **Episode evidence search comes from the host's `lore.episode_evidence_candidates`.**
   It answers the simple, English, CJK, and semantic channels, applies the host's
   access policy itself, returns ids and per-channel ranks only, and must answer

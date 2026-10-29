@@ -11,7 +11,12 @@ import {
 } from "./db";
 import { EPISODE_EVIDENCE_INDEX_REVISION } from "./episodes/episode-evidence";
 import { createEmbeddingMaintenance } from "./maintenance";
-import { createMemoryModule, type MemoryScope, RETRIEVAL_ENTITY_ALIAS_POLICY } from "./memory";
+import {
+  createMemoryModule,
+  type MemoryScope,
+  RETRIEVAL_ENTITY_ALIAS_POLICY,
+  RETRIEVAL_SEMANTIC_POLICY,
+} from "./memory";
 import { cjkLexicalGrams, relaxedEnglishTerms } from "./retrieval/query";
 import {
   CORE_SCHEMA_CONTRACT,
@@ -510,6 +515,11 @@ export interface SemanticCandidateQuery {
   updatedBefore?: string | null;
   metadataFilter?: Record<string, unknown> | null;
   excludedMemoryIds?: readonly string[];
+  /**
+   * Below this many vectors in the Workspace, the host compares every one. Defaults
+   * to RETRIEVAL_SEMANTIC_POLICY.exactScanLimit; 0 asks for the approximate path.
+   */
+  exactScanLimit?: number;
 }
 
 export interface SemanticCandidateRow {
@@ -547,10 +557,13 @@ export function semanticCandidatesStatement(
      FROM lore.semantic_candidates(
        $1::uuid, $2::vector(${dimensions}), $3::text, $4::text, $5::text, ${dimensions},
        $6::double precision, $7::memory_scope, $8::timestamptz, $9::timestamptz, $10::jsonb,
-       $11::uuid[], $12::integer
+       $11::uuid[], $12::integer, $13::integer
      )
      ORDER BY candidate_rank`,
-    semanticCandidateParameters(partitionId, input),
+    [
+      ...semanticCandidateParameters(partitionId, input),
+      input.exactScanLimit ?? RETRIEVAL_SEMANTIC_POLICY.exactScanLimit,
+    ],
   );
 }
 

@@ -324,7 +324,7 @@ $$;
 
 -- The semantic channel, as the engine asks for it: the reference channel over the
 -- partition (referenceSemanticCandidates in ../../src/testing.ts), with no access
--- policy and no index work.
+-- policy and no index work. It is always exact, so it ignores exact_scan_limit.
 CREATE FUNCTION lore.semantic_candidates(
     target_workspace_id uuid,
     query_embedding vector,
@@ -338,7 +338,8 @@ CREATE FUNCTION lore.semantic_candidates(
     updated_before timestamptz,
     metadata_filter jsonb,
     excluded_memory_ids uuid[],
-    candidate_limit integer
+    candidate_limit integer,
+    exact_scan_limit integer
 ) RETURNS TABLE(chunk_id uuid, memory_id uuid, candidate_rank bigint)
     LANGUAGE sql STABLE
     AS $$

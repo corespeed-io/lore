@@ -686,6 +686,19 @@ ACCESS EXCLUSIVE on its table for a catalog change only; if a long transaction h
 one of them, the timeout expires, nothing is recorded, and a rerun repeats the file.
 Every Actor sees exactly the rows it saw before.
 
+`0024` keeps `compatible_from` at 9. It is transactional and adds a 14-argument
+`lore.semantic_candidates` beside the 13-argument one older instances call. The new
+one answers a Workspace of 20,000 or more
+vectors from the HNSW index on `memory_chunk_embeddings`, and falls back to the
+exact comparison when the walk cannot fill the limit. On pgvector 0.8 or later it
+also sets the function's `hnsw.iterative_scan` and `hnsw.max_scan_tuples`. Upgrade
+pgvector to 0.8 before relying on it: without iterative scans, most large
+Workspaces fall back to the exact comparison. After a pgvector upgrade, run
+`ALTER FUNCTION lore.semantic_candidates(...) SET hnsw.iterative_scan TO
+relaxed_order` and `SET hnsw.max_scan_tuples TO 40000` once (a rerun of 0024 does not
+happen). The first search after a restart reads the index from disk (about 0.25 GB
+for 60k vectors), so it can take seconds.
+
 `0022` and `0023` keep `compatible_from` at 9. `0022` is transactional and only
 creates `lore.episode_evidence_candidates`; from the moment it commits, a
 revision-23 instance answers Episode evidence search through it, with the same
