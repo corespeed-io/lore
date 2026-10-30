@@ -15,6 +15,7 @@ import {
   createMemoryModule,
   type MemoryScope,
   RETRIEVAL_ENTITY_ALIAS_POLICY,
+  RETRIEVAL_RELAXED_TERM_POLICY,
   RETRIEVAL_SEMANTIC_POLICY,
 } from "./memory";
 import { cjkLexicalGrams, relaxedEnglishTerms } from "./retrieval/query";
@@ -307,7 +308,7 @@ export function referenceLexicalCandidates(
                 memory.updated_at DESC, chunk.ordinal DESC, chunk.id
        LIMIT $3
      ),
-     english_query_terms AS MATERIALIZED (
+     all_english_query_terms AS MATERIALIZED (
        SELECT plainto_tsquery('english', term) AS query,
          max(CASE
                WHEN term ~ '^[[:upper:]][[:lower:]]' THEN 4.0
@@ -318,6 +319,47 @@ export function referenceLexicalCandidates(
        FROM unnest($4::text[]) AS term
        WHERE numnode(plainto_tsquery('english', term)) > 0
        GROUP BY plainto_tsquery('english', term)
+     ),
+     -- Schema revision 25: a query of more than ${RETRIEVAL_RELAXED_TERM_POLICY.maximumTerms} terms drops the ones nothing visible
+     -- matches, then keeps the ${RETRIEVAL_RELAXED_TERM_POLICY.maximumTerms} found in the fewest of the first
+     -- ${RETRIEVAL_RELAXED_TERM_POLICY.sampleChunks} visible chunks (in memory_id, ordinal order), then the heavier, then by text.
+     present_english_query_terms AS MATERIALIZED (
+       -- Past the budget, terms that match no visible chunk and no visible name drop.
+       SELECT term.query, term.weight
+       FROM all_english_query_terms term
+       WHERE (SELECT count(*) FROM all_english_query_terms) <= ${RETRIEVAL_RELAXED_TERM_POLICY.maximumTerms}
+          OR EXISTS (
+            SELECT 1 FROM memory_chunks chunk
+            JOIN memories memory
+              ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+            WHERE chunk.workspace_id = $2::uuid AND ${filter}
+              AND chunk.search_vector_english @@ term.query
+          )
+          OR EXISTS (
+            SELECT 1 FROM memories memory
+            WHERE memory.workspace_id = $2::uuid AND ${filter}
+              AND to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)) @@ term.query
+          )
+     ),
+     relaxed_term_sample AS MATERIALIZED (
+       SELECT chunk.search_vector_english AS english
+       FROM memory_chunks chunk
+       JOIN memories memory
+         ON memory.id = chunk.memory_id AND memory.workspace_id = chunk.workspace_id
+       WHERE chunk.workspace_id = $2::uuid AND ${filter}
+       ORDER BY chunk.memory_id, chunk.ordinal
+       LIMIT ${RETRIEVAL_RELAXED_TERM_POLICY.sampleChunks}
+     ),
+     english_query_terms AS MATERIALIZED (
+       SELECT term.query, term.weight
+       FROM present_english_query_terms term
+       ORDER BY
+         CASE WHEN (SELECT count(*) FROM present_english_query_terms) > ${RETRIEVAL_RELAXED_TERM_POLICY.maximumTerms}
+           THEN (SELECT count(*) FROM relaxed_term_sample sample WHERE sample.english @@ term.query)
+           ELSE 0 END,
+         term.weight DESC,
+         term.query::text
+       LIMIT ${RETRIEVAL_RELAXED_TERM_POLICY.maximumTerms}
      ),
      relaxed_english_lexical AS (
        SELECT chunk.id AS chunk_id, memory.id AS memory_id,

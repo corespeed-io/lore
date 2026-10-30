@@ -686,6 +686,11 @@ ACCESS EXCLUSIVE on its table for a catalog change only; if a long transaction h
 one of them, the timeout expires, nothing is recorded, and a rerun repeats the file.
 Every Actor sees exactly the rows it saw before.
 
+`0025` keeps `compatible_from` at 9. It is transactional and only replaces
+`lore.lexical_candidates` with the same signature: the relaxed channels of a query
+with more than six terms use its six rarest. Older instances call the same function
+and fuse what it answers.
+
 `0024` keeps `compatible_from` at 9. It is transactional and adds a 14-argument
 `lore.semantic_candidates` beside the 13-argument one older instances call. The new
 one answers a Workspace of 20,000 or more

@@ -180,6 +180,11 @@ its own:
   `RETRIEVAL_SEMANTIC_POLICY.exactScanLimit`: from that many vectors on, a host may
   answer from an approximate index, but must fall back to the exact answer whenever
   the approximate one is short. The reference is always exact.
+- **The relaxed channels use at most six terms (`RETRIEVAL_RELAXED_TERM_POLICY`).**
+  A longer query keeps the six found in the fewest of the first 1,000 visible chunks
+  (in memory_id, ordinal order), then the heavier, then by text.
+  `referenceLexicalCandidates` states the rule, so a host's `lore.lexical_candidates`
+  must apply it too.
 - **Episode evidence search comes from the host's `lore.episode_evidence_candidates`.**
   It answers the simple, English, CJK, and semantic channels, applies the host's
   access policy itself, returns ids and per-channel ranks only, and must answer

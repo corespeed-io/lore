@@ -506,3 +506,52 @@ test("each channel's probe uses its Workspace-leading index as the function's ow
     expect(await plan(true, from, condition), index).not.toContain(index);
   }
 });
+
+test("a long query keeps its rarest terms by the caller's own visible sample, as the reference does", async () => {
+  // Revision 25: past RETRIEVAL_RELAXED_TERM_POLICY.maximumTerms terms, the relaxed
+  // channels keep the terms found in the fewest visible sampled chunks. Bob's private
+  // notes all say "zebra", so zebra is frequent for Bob and rare for Alice.
+  const context = await createMemoryTestContext();
+  await seedCorpus(context);
+  const memories = createMemoryModule(context.database);
+  for (let index = 0; index < 30; index += 1) {
+    await memories.remember(context.bob, {
+      content: `Bob's zebra stable note ${index} about staging.`,
+      scope: "private",
+    });
+  }
+  await memories.remember(context.alice, {
+    content: "The zebra crossing near the office closes on Friday for the Kestrel rollout.",
+    scope: "shared",
+  });
+  const aliceAgent = await readerAgent(context, context.alice);
+  const long =
+    "zebra crossing office Friday Kestrel rollout staging retry budget deploys checklist";
+  const queries: LexicalCandidateQuery[] = [
+    { query: long, candidateLimit: 40, entityAliasRecall: true },
+    { query: long, candidateLimit: 3 },
+    { query: long, candidateLimit: 40, scope: "private" },
+  ];
+  const relaxed = new Map<string, string[]>();
+  for (const [name, actor] of [
+    ["alice", context.alice],
+    ["bob", context.bob],
+    ["alice's agent", aliceAgent.actor],
+  ] as const) {
+    for (const { query, host, reference } of await compareLexicalCandidates(
+      createMemoryStorage(context.database, actor),
+      queries,
+    )) {
+      expect(host, `${name} ${JSON.stringify(query)}`).toEqual(reference);
+      if (query.candidateLimit === 40 && !query.scope) {
+        relaxed.set(
+          name,
+          reference.filter((line) => line.startsWith("relaxed_english ")),
+        );
+      }
+    }
+  }
+  // Alice keeps zebra, so the crossing note matches it with other kept terms.
+  expect(relaxed.get("alice")?.length).toBeGreaterThan(0);
+  expect(relaxed.get("alice")).toEqual(relaxed.get("alice's agent"));
+});

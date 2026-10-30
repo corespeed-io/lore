@@ -142,6 +142,8 @@ CREATE TABLE memory_links (
 -- The lexical channels, as the engine asks for them. This host has no access policy
 -- beyond the storage partition, so its body is the reference channels over the
 -- partition (referenceLexicalCandidates in ../../src/testing.ts) with no index work.
+-- It omits the reference's six-term budget for the relaxed channels (revision 25);
+-- this fixture's queries have fewer terms.
 CREATE FUNCTION lore.lexical_candidates(
     target_workspace_id uuid,
     search_query text,
