@@ -142,8 +142,7 @@ CREATE TABLE memory_links (
 -- The lexical channels, as the engine asks for them. This host has no access policy
 -- beyond the storage partition, so its body is the reference channels over the
 -- partition (referenceLexicalCandidates in ../../src/testing.ts) with no index work.
--- It omits the reference's six-term budget for the relaxed channels (revision 25);
--- this fixture's queries have fewer terms.
+-- It applies the reference's six-term budget for the relaxed channels (revision 25).
 CREATE FUNCTION lore.lexical_candidates(
     target_workspace_id uuid,
     search_query text,
@@ -195,7 +194,7 @@ CREATE FUNCTION lore.lexical_candidates(
              memory.updated_at DESC, chunk.ordinal DESC, chunk.id
     LIMIT candidate_limit
   ),
-  english_query_terms AS MATERIALIZED (
+  all_english_query_terms AS MATERIALIZED (
     SELECT plainto_tsquery('english', term) AS query,
       max(CASE
             WHEN term ~ '^[[:upper:]][[:lower:]]' THEN 4.0
@@ -206,6 +205,43 @@ CREATE FUNCTION lore.lexical_candidates(
     FROM unnest(relaxed_terms) AS term
     WHERE numnode(plainto_tsquery('english', term)) > 0
     GROUP BY plainto_tsquery('english', term)
+  ),
+  -- The relaxed term budget (revision 25): past six terms, drop the ones nothing in
+  -- the partition matches, then keep the six found in the fewest of its first 1,000
+  -- chunks (memory_id, ordinal order), then the heavier, then by text.
+  present_english_query_terms AS MATERIALIZED (
+    SELECT term.query, term.weight
+    FROM all_english_query_terms term
+    WHERE (SELECT count(*) FROM all_english_query_terms) <= 6
+       OR EXISTS (
+         SELECT 1 FROM memory_chunks chunk
+         JOIN visible_memories memory ON memory.id = chunk.memory_id
+         WHERE chunk.workspace_id = target_workspace_id
+           AND chunk.search_vector_english @@ term.query
+       )
+       OR EXISTS (
+         SELECT 1 FROM visible_memories memory
+         WHERE to_tsvector('english', concat_ws(' ', memory.title, memory.gloss)) @@ term.query
+       )
+  ),
+  relaxed_term_sample AS MATERIALIZED (
+    SELECT chunk.search_vector_english AS english
+    FROM memory_chunks chunk
+    JOIN visible_memories memory ON memory.id = chunk.memory_id
+    WHERE chunk.workspace_id = target_workspace_id
+    ORDER BY chunk.memory_id, chunk.ordinal
+    LIMIT 1000
+  ),
+  english_query_terms AS MATERIALIZED (
+    SELECT term.query, term.weight
+    FROM present_english_query_terms term
+    ORDER BY
+      CASE WHEN (SELECT count(*) FROM present_english_query_terms) > 6
+        THEN (SELECT count(*) FROM relaxed_term_sample sample WHERE sample.english @@ term.query)
+        ELSE 0 END,
+      term.weight DESC,
+      term.query::text
+    LIMIT 6
   ),
   relaxed_english_lexical AS (
     SELECT chunk.id AS chunk_id, memory.id AS memory_id,
