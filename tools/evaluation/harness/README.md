@@ -153,7 +153,9 @@ An answer line gives the answers and verdicts taken from the store and made new.
   whose scores came from more than one grading, so a judge change can never pass
   for a system change.
 - **Old refs work too.** A git ref runs in its own worktree under
-  `~/.cache/lore-eval/worktrees`, with this checkout's harness copied over it.
+  `~/.cache/lore-eval/worktrees`, with this checkout's harness copied over it, and
+  its width transform (`tools/evaluation/retrieval/migrate-dimensions.ts`) too, so
+  every ref's migrations are rewritten by one rule.
   The provenance line shows its engine loaded from that worktree.
 - **Budget guard.** The reader cost is estimated before any call. A run stops if
   the estimate is over `--budget-usd` (default $10).

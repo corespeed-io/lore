@@ -46,6 +46,8 @@ function transform(sql: string): string {
 
 function assertNoResidualWidth(sql: string, name: string): void {
   for (const line of sql.split("\n")) {
+    // A comment cannot set a width; migration headers cite measured corpora.
+    if (line.trimStart().startsWith("--")) continue;
     if (line.includes("1024") && !line.includes("<= 1024")) {
       throw new Error(`${name} still contains an untransformed 1024: ${line.trim()}`);
     }

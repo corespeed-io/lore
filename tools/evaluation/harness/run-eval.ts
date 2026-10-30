@@ -196,6 +196,10 @@ async function collectAt(ref: string, dataset: DatasetName, tier: TierName): Pro
   const harness = join(directory, "tools/evaluation/harness");
   rmSync(harness, { recursive: true, force: true });
   cpSync(join(checkoutRoot, "tools/evaluation/harness"), harness, { recursive: true });
+  // The width transform is harness tooling too. The copy still reads the ref's own
+  // migrations, which it finds relative to its place in the ref's tree.
+  const transform = "tools/evaluation/retrieval/migrate-dimensions.ts";
+  cpSync(join(checkoutRoot, transform), join(directory, transform));
   const datasets = join(directory, "evaluation/datasets");
   if (!existsSync(datasets)) {
     // The target must exist: a fresh sandbox downloads datasets through this link.
