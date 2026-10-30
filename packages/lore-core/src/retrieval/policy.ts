@@ -21,6 +21,19 @@ export const RETRIEVAL_SEMANTIC_POLICY = {
   exactScanLimit: 20_000,
 } as const;
 
+/**
+ * The relaxed lexical channel's term budget (schema revision 25). A query of more
+ * than `maximumTerms` terms keeps the `maximumTerms` found in the fewest of the first
+ * `sampleChunks` visible chunks, in (memory_id, ordinal) order; heavier terms, then
+ * term text, break ties. The host function hard-codes both numbers; the reference
+ * statement in `./testing` reads them.
+ */
+export const RETRIEVAL_RELAXED_TERM_POLICY = {
+  revision: "rarest-six-of-visible-sample-v1",
+  maximumTerms: 6,
+  sampleChunks: 1000,
+} as const;
+
 export const RETRIEVAL_ENTITY_ALIAS_POLICY = {
   revision: "deterministic-exact-alias-rrf-v1",
   candidateGeneration: "independent-rls-filtered-chunk-channel",

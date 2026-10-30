@@ -40,14 +40,20 @@ test("an independent storage host runs Memory CRUD and retrieval without OSS ide
     await expect(memories.retrieve(created.id)).resolves.toEqual(created);
     const found = await memories.search({ query: "harbor observatory" });
     expect(found.map((result) => result.memory.id)).toEqual([created.id]);
-    // This host's lore.lexical_candidates is the reference channels over its partition.
+    // This host's lore.lexical_candidates is the reference channels over its partition,
+    // including the relaxed six-term budget a seven-term query reaches.
+    const long = await memories.remember({ content: "alpha beta gamma delta epsilon omega zeta" });
+    const short = await memories.remember({ content: "alpha zeta" });
     for (const { query, host, reference } of await compareLexicalCandidates(storage, [
+      { query: "alpha beta gamma delta epsilon omega zeta", candidateLimit: 40 },
       { query: "Harbor observatory sunrise", candidateLimit: 40, entityAliasRecall: true },
       { query: "observatory opens", candidateLimit: 1 },
       { query: "observatory", candidateLimit: 40, metadataFilter: { category: "none" } },
     ])) {
       expect(host, query.query).toEqual(reference);
     }
+    await memories.forget(long.id);
+    await memories.forget(short.id);
     const chunks = await postgres.query<{ content: string }>(
       "SELECT content FROM memory_chunks WHERE memory_id = $1 ORDER BY ordinal",
       [created.id],

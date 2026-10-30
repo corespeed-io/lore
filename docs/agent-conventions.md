@@ -446,6 +446,9 @@ whoever owns it.
   `hnsw.iterative_scan` and `hnsw.max_scan_tuples` only on pgvector 0.8 or later,
   which define them. The 13-argument function of 0020 stays, exact, for revision-20
   through 23 instances, so `compatible_from` stays 9.
+  `0025_relaxed_rarest_terms.sql` replaces `lore.lexical_candidates` (same signature)
+  so the relaxed channels use at most six terms, a long query's rarest (see
+  "Providers, search, reranking, and retrieval knobs"). It keeps `compatible_from = 9`.
   `tests/server/schema-revision-11-upgrade.test.ts` upgrades a revision-9 database
   with data, pins 0010's lock set, reruns a stopped 0011, and refuses a migration
   from 0010 on whose final UPDATE omits `compatible_from` (the column has no default
@@ -459,7 +462,7 @@ whoever owns it.
   also generates their OpenAPI `const` values; the frozen SQL function only has to
   keep agreeing with it. Fix a failure there with a forward migration or a TypeScript
   change, never by editing an applied migration. Every new migration
-  must update `lore_system_state.schema_revision` to its own version number (currently 24) —
+  must update `lore_system_state.schema_revision` to its own version number (currently 25) —
   the wrapper's postflight fails on the mismatch otherwise — and must bump both
   `LATEST_SCHEMA_REVISION` (`scripts/database/lib/migration-preflight.ts`) and
   `LORE_SCHEMA_REVISION` (`src/modules/operations/service.ts`) in the same change: the
@@ -478,7 +481,7 @@ whoever owns it.
   never serves fields outside its OpenAPI contract; features, like limits, come from
   `DEPLOYMENT_FEATURES`. Migration preflight still refuses a database newer than the
   application. `tests/integration/portable-core.test.ts`,
-  `tests/integration/api.test.ts` pin the current revision (24), and
+  `tests/integration/api.test.ts` pin the current revision (25), and
   `scripts/checks/smoke-memory-core.ts` checks it against `LORE_SCHEMA_REVISION`;
 - dbmate 2.35 parses and applies the transactional plain-SQL migrations; it is migration tooling,
   not Lore's runtime ORM. A statement that refuses a transaction block
@@ -1559,6 +1562,24 @@ Index loops. Keep local Ollama at one unless measured.
   reference would fetch them again. What remains is scoring every chunk that matches
   two relaxed terms, which a query of words in a third of the Workspace makes about
   16k chunks (~0.4 s).
+  Since revision 25 the relaxed channels use at most six terms
+  (`RETRIEVAL_RELAXED_TERM_POLICY`). A query of six or fewer is unchanged. A longer
+  one keeps the six present terms found in the fewest of the first 1,000 visible
+  chunks of the searched Memories, in (memory_id, ordinal) order, then the heavier,
+  then by text;
+  only visible chunks are sampled, so another User's private Memory never decides
+  which terms are kept. Six terms make at most 15 probe pairs; a 17-term question
+  made 136, and its probe alone took 0.19 s. On 500 LongMemEval-S questions over
+  48,000 real chunks, lexical search went from p50 70 ms and p95 466 ms (worst
+  0.95 s) to p50 44 ms and p95 156 ms (worst 0.29 s); 278 questions had more than
+  six terms. Terms that no visible chunk or name matches drop first, which changes no
+  answer, so they never displace a term that can match. The full eval gate against
+  revision 24 (2026-10-30, gemini-3.5-flash reader, gpt-5.6-luna judge) was
+  `improved`: LoCoMo answers 56.1% to 56.8% and all-gold retrieval 68.8% to 69.6%
+  (19 fixed, 6 broken, p = 0.015); LongMemEval-S answers 60.6% to 61.4% and
+  retrieval 97.9% to 98.1% (within noise). `referenceLexicalCandidates` states the
+  rule, and `tests/server/lexical-candidates.test.ts` pins that Bob's private notes
+  make a term frequent for Bob only.
   Since revision 20 the semantic channel runs in the host's `lore.semantic_candidates`
   (`db/migrations/0020`), built and guarded like `lore.lexical_candidates`. Under RLS
   each embedded chunk passed the chunk and embedding policies, which look up its
