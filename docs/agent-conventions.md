@@ -1918,7 +1918,9 @@ Benchmark is part of the product quality system even without AutoDream.
   judging a product change. It runs the shipped Memory path on fixed, SHA-ordered
   stratified tiers of LongMemEval-S and LoCoMo (smoke: retrieval only; standard;
   full) and gates a candidate (default: the working tree) against a base ref. A
-  ref runs in its own worktree with this checkout's harness copied over it.
+  ref runs in its own worktree with this checkout's harness and width transform
+  (`tools/evaluation/retrieval/migrate-dimensions.ts`, which skips SQL comments)
+  copied over it.
   - **Rule:** pre-registered in `stats.ts`. A significant paired loss, or any
     isolation failure, is `regressed` (exit 1). `improved` needs a significant
     gain and no category regression. Everything else is `no-evidence`, which
