@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@corespeed/lore-sdk": "^0.3.0",
-    "@modelcontextprotocol/server": "^2.3.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "zod": "^4.6.7"
   },
   "engines": {
